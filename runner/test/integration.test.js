@@ -58,7 +58,7 @@ async function setup() {
   git(tmp, 'clone', '-q', origin, proj);
   fs.copyFileSync(path.join(HERE, 'fixtures/fake-gradlew.sh'), path.join(proj, 'gradlew'));
   fs.chmodSync(path.join(proj, 'gradlew'), 0o755);
-  fs.writeFileSync(path.join(proj, '.gitignore'), 'app/build/\nFAIL\nSLOW\n');
+  fs.writeFileSync(path.join(proj, '.gitignore'), 'app/build/\nFAIL\nSLOW\nBROKEN\n');
   git(proj, 'add', '.');
   git(proj, 'commit', '-q', '-m', 'initial commit');
   git(proj, 'push', '-q', 'origin', 'HEAD:main');
@@ -225,7 +225,7 @@ test('build → install → launch, serialized, with live SSE and replay', async
 
   const apk = await api(`/api/builds/${a.id}/apk`, { raw: true });
   assert.equal(apk.headers.get('content-type'), 'application/vnd.android.package-archive');
-  assert.equal(await apk.text(), 'PK-fake-debug');
+  assert.equal(Buffer.from(await apk.arrayBuffer()).subarray(0, 2).toString(), 'PK');
   assert.equal((await waitBuild(b.id)).state, 'succeeded');
   // b started only after a finished
   assert.ok(Date.parse((await api(`/api/builds/${b.id}`)).data.startedAt) >= Date.parse(done.finishedAt));
@@ -243,6 +243,20 @@ test('release build is signed via injected env, never argv', async () => {
   const gp = path.join(ctx.env.GRADLE_USER_HOME, 'gradle.properties');
   assert.ok(!fs.readFileSync(gp, 'utf8').includes('injected.signing'), 'signing secrets left behind');
   assert.equal(fs.statSync(gp).mode & 0o077, 0, 'gradle.properties must be 0600');
+});
+
+test('an APK without manifest/resources fails the build instead of reaching the phone', async () => {
+  fs.writeFileSync(path.join(ctx.proj, 'BROKEN'), '');
+  try {
+    const r = (await api('/api/builds', { method: 'POST', body: { task: 'assembleDebug', autoInstallAfterBuild: true } })).data;
+    const b = await waitBuild(r.id);
+    assert.equal(b.state, 'failed');
+    assert.match(b.error, /missing AndroidManifest\.xml and resources\.arsc/);
+    assert.match(b.error, /AAPT2_MODE=box64/);
+    assert.ok(!(await buildLog(r.id)).includes('=== installing ==='));
+  } finally {
+    fs.rmSync(path.join(ctx.proj, 'BROKEN'), { force: true });
+  }
 });
 
 test('cancel kills the running build process group', async () => {

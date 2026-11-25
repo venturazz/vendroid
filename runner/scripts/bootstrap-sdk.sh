@@ -5,13 +5,17 @@
 #   ANDROID_HOME          SDK location                        (default /opt/android-sdk)
 #   SDK_PACKAGES          sdkmanager packages (space separated) (default "platforms;android-35 build-tools;35.0.0")
 #   CMDLINE_TOOLS_BUILD   cmdline-tools zip build number      (default 11076708)
-#   AAPT2_MODE            auto | prebuilt | path | apt | box64 (default auto)
+#   AAPT2_MODE            auto | box64 | prebuilt | path | apt (default auto)
 #   AAPT2_BINARY          native aarch64 aapt2 for mode "path"
 #
 # Why: Google ships aapt2/aidl/zipalign (SDK build-tools and the aapt2 Maven artifact AGP downloads)
-# for x86_64 only. "prebuilt" installs statically linked aarch64 builds compiled from AOSP
-# (github.com/lzhiyong/android-sdk-tools, pinned by SHA-256), swaps them into build-tools, and the
-# runner points AGP at that aapt2 via android.aapt2FromMavenOverride.
+# for x86_64 only. The runner points AGP at a working aapt2 via android.aapt2FromMavenOverride:
+#   box64     Google's own x86_64 aapt2 from the newest installed build-tools, run by box64. Always
+#             matches current SDK/AGP formats (needed for AGP 9 release builds / compileSdk 37+).
+#   prebuilt  static aarch64 AOSP build-tools 35.0.2 (github.com/lzhiyong/android-sdk-tools, SHA-256
+#             pinned). Fast and dependency-free; fine for AGP 8.x, too old for AGP 9 release builds.
+# auto = path > box64 (if installed) > prebuilt > apt. aidl/zipalign/aapt are always swapped for the
+# aarch64 builds so tasks that exec them directly work.
 set -euo pipefail
 
 ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
@@ -112,14 +116,26 @@ try_path()     { [ -n "${AAPT2_BINARY:-}" ] && works "$AAPT2_BINARY" && choose="
 try_prebuilt() { install_prebuilt && patch_build_tools && choose="$PREBUILT_DIR/build-tools/aapt2"; }
 try_apt()      { local b; b="$(command -v aapt2 2>/dev/null || true)"; [ -n "$b" ] && works "$b" && choose="$b"; }
 try_box64() {
-  command -v box64 >/dev/null 2>&1 || return 1
-  local x86
-  x86="$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2.x86_64 "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -n1 || true)"
-  [ -n "$x86" ] || return 1
-  mkdir -p "$ANDROID_HOME/aapt2-box64"
-  printf '#!/bin/sh\nexec box64 "%s" "$@"\n' "$x86" > "$ANDROID_HOME/aapt2-box64/aapt2"
-  chmod 0755 "$ANDROID_HOME/aapt2-box64/aapt2"
-  works "$ANDROID_HOME/aapt2-box64/aapt2" && choose="$ANDROID_HOME/aapt2-box64/aapt2"
+  [ "$ARCH" = "aarch64" ] && command -v box64 >/dev/null 2>&1 || return 1
+  local w="$ANDROID_HOME/aapt2-box64/aapt2"
+  mkdir -p "$(dirname "$w")"
+  # Resolved on every call, so build-tools that AGP downloads later are picked up automatically.
+  cat > "$w" <<'SH'
+#!/bin/sh
+# aapt2 shim: Google's x86_64 aapt2 from the newest build-tools, executed by box64.
+SDK="$(cd "$(dirname "$0")/.." && pwd)"
+for bt in $(ls -d "$SDK"/build-tools/*/ 2>/dev/null | sort -rV); do
+  for f in "${bt}aapt2.x86_64" "${bt}aapt2"; do
+    if [ -f "$f" ] && [ "$(od -An -tx1 -j18 -N1 "$f" | tr -d ' ')" = "3e" ]; then
+      BOX64_LOG=0 BOX64_NOBANNER=1 exec box64 "$f" "$@"
+    fi
+  done
+done
+echo "aapt2 shim: no x86_64 aapt2 found under $SDK/build-tools" >&2
+exit 1
+SH
+  chmod 0755 "$w"
+  works "$w" && choose="$w"
 }
 try_native_x86() { # x86_64 hosts (dev machines / CI): the SDK's own aapt2 works as-is
   [ "$ARCH" = "x86_64" ] || return 1
@@ -128,12 +144,15 @@ try_native_x86() { # x86_64 hosts (dev machines / CI): the SDK's own aapt2 works
   [ -n "$b" ] && works "$b" && choose=""
 }
 
+# The aarch64 aidl/zipalign/aapt swap is useful in every mode (originals kept as *.x86_64).
+[ "$ARCH" = "aarch64" ] && { install_prebuilt && patch_build_tools || log "WARNING: could not install aarch64 build-tools"; }
+
 case "$AAPT2_MODE" in
   path)     try_path || true ;;
   prebuilt) try_prebuilt || true ;;
   apt)      try_apt || true ;;
   box64)    try_box64 || true ;;
-  auto)     try_path || try_prebuilt || try_apt || try_box64 || try_native_x86 || true ;;
+  auto)     try_path || try_box64 || try_prebuilt || try_apt || try_native_x86 || true ;;
   *) log "unknown AAPT2_MODE=$AAPT2_MODE"; exit 2 ;;
 esac
 
@@ -145,9 +164,9 @@ elif [ "$ARCH" = "x86_64" ]; then
   log "x86_64 host: using the SDK's own aapt2 (no override needed)"
 else
   log "ERROR: no working aarch64 aapt2 found (mode=$AAPT2_MODE). Options:"
-  log "  AAPT2_MODE=prebuilt  (default; needs github.com reachable)"
+  log "  AAPT2_MODE=box64     (install box64 first: Docker INSTALL_BOX64=true, setup BUILD_BOX64=1)"
+  log "  AAPT2_MODE=prebuilt  (needs github.com reachable)"
   log "  AAPT2_MODE=path AAPT2_BINARY=/path/to/aarch64/aapt2"
-  log "  AAPT2_MODE=box64     (install box64 first)"
   exit 1
 fi
 

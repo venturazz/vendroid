@@ -15,7 +15,7 @@ x-image: &image
     context: ./runner
     dockerfile: Dockerfile.arm64
     args:
-      INSTALL_BOX64: ${INSTALL_BOX64:-false}
+      INSTALL_BOX64: ${INSTALL_BOX64:-true}
   image: android-remote-runner:local
   platform: linux/arm64
 

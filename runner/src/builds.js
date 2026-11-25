@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config, aapt2Path, bootstrapState } from './config.js';
 import { ensureGradleProperties } from './gradleProps.js';
+import { apkProblem } from './apkcheck.js';
 import { childEnv, lineSplitter, killGroup, run } from './exec.js';
 import * as adbm from './adb.js';
 import { notifyHermes, sliceBuildError } from './ai.js';
@@ -278,6 +279,8 @@ export class BuildManager {
 
       const apk = this.#collectApk(b);
       if (!apk) throw new Error('Build succeeded but no APK was found under build/outputs/apk');
+      const problem = apkProblem(path.join(config.artifactsDir, apk.file));
+      if (problem) throw new Error(problem);
       this.#line(b, `APK: ${path.basename(apk.file)} (${(apk.size / 1e6).toFixed(1)} MB)`);
 
       if (b.options.autoInstallAfterBuild) {

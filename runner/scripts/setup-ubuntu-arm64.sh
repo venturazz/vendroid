@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Direct (non-Docker) install on Ubuntu 22.04/24.04 aarch64. Idempotent: re-run it to upgrade.
 #   sudo bash runner/scripts/setup-ubuntu-arm64.sh
-# Optional env: PROJECT_GIT_URL, PROJECT_GIT_BRANCH, BUILD_BOX64=1, AAPT2_MODE, SKIP_SDK=1
+# Optional env: PROJECT_GIT_URL, PROJECT_GIT_BRANCH, BUILD_BOX64=0 (skip box64), AAPT2_MODE, SKIP_SDK=1
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "run as root (sudo)"; exit 1; }
 [ "$(uname -m)" = "aarch64" ] || echo "WARNING: this host is $(uname -m), not aarch64"
@@ -29,10 +29,11 @@ if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split("."
   apt-get install -y -q nodejs
 fi
 
-if [ "${BUILD_BOX64:-0}" = "1" ] && ! command -v box64 >/dev/null; then
-  log "building box64"
+if [ "${BUILD_BOX64:-1}" = "1" ] && [ "$(uname -m)" = "aarch64" ] && ! command -v box64 >/dev/null; then
+  log "building box64 ${BOX64_VERSION:-v0.4.4} (runs Google's aapt2; about 5 minutes, once)"
   apt-get install -y -q --no-install-recommends cmake build-essential python3
-  git clone --depth 1 https://github.com/ptitSeb/box64 /tmp/box64
+  rm -rf /tmp/box64
+  git clone -q --depth 1 --branch "${BOX64_VERSION:-v0.4.4}" https://github.com/ptitSeb/box64 /tmp/box64
   cmake -S /tmp/box64 -B /tmp/box64/build -DARM_DYNAREC=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
   cmake --build /tmp/box64/build -j"$(nproc)" && cmake --install /tmp/box64/build
   rm -rf /tmp/box64

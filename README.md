@@ -47,11 +47,11 @@ Full instructions, phone pairing and troubleshooting: **[docs/RUNBOOK.md](docs/R
 
 ## ARM64 toolchain
 
-Google ships `aapt2`, `aidl` and `zipalign` for x86_64 only. `runner/scripts/bootstrap-sdk.sh` installs
-statically linked aarch64 builds compiled from AOSP (pinned by SHA-256), swaps them into `build-tools`, and the runner
-points AGP at that `aapt2` with `android.aapt2FromMavenOverride` in a managed block of
-`$GRADLE_USER_HOME/gradle.properties`. Your project needs no changes. Alternatives (`AAPT2_MODE=path|box64`) are in the runbook.
-Gradle is capped at `-Xmx4096m -XX:+UseG1GC`, the Kotlin daemon at `-Xmx3072m`, with 3 workers.
+Google ships `aapt2`, `aidl` and `zipalign` for x86_64 only. The runner points AGP at Google's own `aapt2`, run under
+box64 (installed by the image and the setup script), through `android.aapt2FromMavenOverride` in a managed block of
+`$GRADLE_USER_HOME/gradle.properties`. The other build tools are swapped for native aarch64 builds. Your project needs no
+changes, and every APK is checked for a manifest and resource table before it can reach the phone. Details and
+alternatives: runbook §7. Gradle is capped at `-Xmx4096m -XX:+UseG1GC`, the Kotlin daemon at `-Xmx3072m`, with 3 workers.
 
 ## Layout
 
@@ -122,5 +122,5 @@ strong password, and keep unrelated secrets out of the runner user's reach.
 ## Development
 
 ```bash
-cd runner && npm test        # 21 unit + integration tests, fake adb/gradlew/9Router/Hermes, ~5 s
+cd runner && npm test        # 22 unit + integration tests, fake adb/gradlew/9Router/Hermes, ~5 s
 ```

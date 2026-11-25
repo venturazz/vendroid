@@ -61,7 +61,7 @@ stays authorized), `runner-data` (history, logs, APKs, generated password), `pro
    git clone https://github.com/venturazz/vendroid && cd vendroid
    sudo PROJECT_GIT_URL=https://github.com/you/app.git bash runner/scripts/setup-ubuntu-arm64.sh
    ```
-   It installs JDK 17 + 21, Node 22, adb, the SDK and aarch64 tools. It also creates the `android-runner` user and
+   It installs JDK 17 + 21, Node 22, adb, box64, the SDK and aarch64 tools. It also creates the `android-runner` user and
    `/etc/android-runner.env`, starts the service, and prints the password.
 2. Edit `/etc/android-runner.env` (`DEFAULT_PACKAGE_NAME`, `DEFAULT_DEVICE_ADDRESS`, AI keys), then
    `sudo systemctl restart android-runner`.
@@ -134,26 +134,35 @@ The runner uses AGP's injected-signing properties, the mechanism Android Studio 
 
 ## 7. ARM64 aapt2 details
 
-`bootstrap-sdk.sh` picks the first working option for `AAPT2_MODE=auto`:
+Google ships `aapt2`, `aidl` and `zipalign` for x86_64 only. `bootstrap-sdk.sh` sets things up, and with `AAPT2_MODE=auto` it uses the first option that works:
 
-| Mode | What it does | When to use |
+| Mode | What it does | Notes |
 |---|---|---|
-| `path` | uses `AAPT2_BINARY` | you have your own aarch64 aapt2 |
-| `prebuilt` (default) | downloads static aarch64 AOSP build-tools 35.0.2 (SHA-256 pinned), swaps `aapt2`, `aapt`, `aidl`, `zipalign`, … into every installed `build-tools/*` (originals kept as `*.x86_64`) | normal case |
-| `apt` | `/usr/bin/aapt2` from a distro package, if present | offline hosts |
-| `box64` | runs Google's own x86_64 `aapt2` under box64 (build the image with `INSTALL_BOX64=true`, or run setup with `BUILD_BOX64=1`) | a newer AGP needs an aapt2 feature the prebuilt lacks |
+| `path` | uses your `AAPT2_BINARY` | for a custom aarch64 build |
+| `box64` (default when box64 is installed) | runs **Google's own** x86_64 `aapt2` from the newest installed `build-tools` under box64, so the format always matches your SDK/AGP | the Docker image and the setup script install box64 (pinned `v0.4.4`, a one-time compile of about 5 minutes). Opt out with `INSTALL_BOX64=false` / `BUILD_BOX64=0` |
+| `prebuilt` | static aarch64 AOSP build-tools 35.0.2 (SHA-256 pinned) | no emulation, but **too old for AGP 9 release builds** |
+| `apt` | `/usr/bin/aapt2` from a distro package | offline hosts |
+
+In every mode, `aidl`, `zipalign`, `aapt`, `dexdump` and `split-select` inside each installed `build-tools/*` are swapped for
+native aarch64 builds (originals kept as `*.x86_64`).
 
 The chosen path is stored in `$ANDROID_HOME/.aapt2_path`. The runner writes it as `android.aapt2FromMavenOverride`
 into `$GRADLE_USER_HOME/gradle.properties`, which outranks the project's own file, and also passes it as `-P`.
-`GET /api/health/env` runs `aapt2 version` so you can confirm it works. CI exercises `prebuilt` with a pinned AGP 8 stack
-and with the latest AGP every week, so a breaking AGP release shows up there first.
+
+After every build the runner checks that the APK contains `AndroidManifest.xml` and `resources.arsc`. An aapt2 that is
+too old can make Gradle report success while writing a package without them. The runner fails such a build with a
+clear message instead of installing it.
+
+CI builds a Compose app on arm64 against a pinned AGP 8 stack and against the latest AGP/Gradle/Kotlin/compileSdk every
+week, so an incompatible AGP release shows up there first.
 
 ## 8. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | Log arrives all at once | Proxy buffering. Caddy `flush_interval -1`, Nginx `proxy_buffering off; gzip off`. |
-| `AAPT2 … Daemon startup failed` / `Syntax error: "(" unexpected` | x86_64 aapt2 is being used: check **env → aapt2**, then re-run bootstrap (`docker compose restart runner` or the setup script). |
+| `AAPT2 … Daemon startup failed` / `Syntax error: "(" unexpected` | aapt2 can't run: check **env → aapt2**, then re-run bootstrap (`docker compose restart runner` or the setup script). |
+| Build fails with “APK is missing AndroidManifest.xml…” | aapt2 too old for your AGP: make sure box64 is installed and `AAPT2_MODE=auto` or `box64`, then restart. |
 | `SDK location not found` / missing platform | Add it to `SDK_PACKAGES` (e.g. `platforms;android-36`) and restart. Licenses are pre-accepted, so AGP can also download it. |
 | `Unsupported class file major version` | The project needs another JDK: Docker `JAVA_VERSION=21`, systemd `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-arm64`. |
 | `git pull` fails | Private repo: put a read-only token in the remote URL (`git -C <project> remote set-url origin https://<token>@github.com/…`). |
