@@ -112,7 +112,11 @@ export async function openFile(path, { line, preview = false } = {}) {
     } else {
       t.editor = makeEditor(pane, {
         doc: f.content, path,
-        onChange: () => { if (!t.dirty) { t.dirty = true; renderTabs(); } },
+        onChange: (v) => {
+          if (t.reloading) return;
+          const d = v !== t.saved;
+          if (d !== t.dirty) { t.dirty = d; renderTabs(); }
+        },
         onSave: () => save(t),
         onCursor: (ln, col) => { if (t === active) $('sbCursor').textContent = `Ln ${ln}, Col ${col}`; },
       });
@@ -200,9 +204,13 @@ export async function reloadFromDisk(paths) {
   for (const t of tabs.filter((x) => x.kind === 'file' && x.editor && (!paths || paths.includes(x.path)))) {
     let f;
     try { f = await pApi(`/file?path=${encodeURIComponent(t.path)}`); } catch { close(t, { force: true }); continue; }
-    if (f.hash === t.hash) continue;
-    if (t.dirty) { toast(`${t.path} changed on disk; your unsaved edits were kept`, 'err'); continue; }
-    t.editor.setValue(f.content ?? '');
+    if (f.content === undefined) continue;
+    const current = t.editor.getValue();
+    if (current === f.content) { t.hash = f.hash; t.saved = f.content; t.dirty = false; continue; }
+    if (t.dirty && current !== t.saved) { toast(`${t.path} changed on disk; your unsaved edits were kept`, 'err'); continue; }
+    t.reloading = true;
+    t.editor.setValue(f.content);
+    t.reloading = false;
     t.hash = f.hash;
     t.saved = f.content;
     t.dirty = false;

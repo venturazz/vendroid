@@ -1,134 +1,140 @@
-# Android Remote Runner: specification (as built)
+# Vendroid: specification (as built)
 
-Version 1.1, branch `feat/android-remote-runner`. This document describes what exists today. Each item has an ID
-(e.g. `B-3`) so changes can be requested precisely ("change B-3 to …", "remove D-6", "add a new P-section").
+Version 2.0, branch `feat/android-remote-runner`. Each item has an ID, so you can request a change precisely
+("change E-4", "remove G-6", "add a new H-section"). Items marked *(v1)* are unchanged from version 1.
 
 ## 0. Scope
 
-| In scope (built) | Not built yet |
+| Built | Not built (yet) |
 |---|---|
-| One Android project (one git repo) | Multiple projects |
-| One build at a time, with a queue | Uploading APKs not built here |
-| Physical phone(s) over ADB through a ZeroTier/WireGuard tunnel | Managing apps already installed on the phone |
-| Live build log and logcat | AI that writes or changes code |
-| AI *analysis* of build errors and crashes (9Router), hand-off to Hermes | Multiple user accounts / roles |
-| Push-to-deploy webhook, signed release builds | Emulators |
-| Single password login | |
+| Many Android projects (Project Hub), templates, clone | Uploading/managing APKs not built here; managing other apps on the phone |
+| Browser editor, explorer, search, git | Visual layout designer / Compose preview rendering |
+| AI that proposes and applies code edits (9Router); Hermes via MCP/REST | Multiple user accounts / roles |
+| Build → install → launch on a physical phone over a VPN tunnel | Emulators |
 
 ## 1. Platform and deployment
 
-| ID | Item | Current behaviour |
+| ID | Item | Behaviour |
 |---|---|---|
-| P-1 | Target host | OCI Ampere aarch64, Ubuntu 22.04/24.04, 4 OCPU / 24 GB |
-| P-2 | Backend | Node.js 20+, standard library only (no npm dependencies) |
-| P-3 | Frontend | Plain HTML/CSS/JS, served by the backend, dark theme |
-| P-4 | Mode A: Coolify / Docker Compose | `runner` service (host network) + `edge` relay (bridge network, the one Coolify routes the domain to) |
-| P-5 | Mode B: systemd | `setup-ubuntu-arm64.sh` installs everything; Caddy or Nginx in front for HTTPS |
-| P-6 | Port | 3080, bound to 127.0.0.1 (never public) |
-| P-7 | Persistent data | Android SDK, Gradle cache, ADB key (`~/.android`), build history/logs/APKs, project checkout |
-| P-8 | Java | JDK 17 runs Gradle; JDK 21 installed for projects that need it (`JAVA_VERSION=21`) |
-| P-9 | ARM64 build tools | box64 runs Google's own x86_64 `aapt2`; `aidl`/`zipalign`/`aapt` are swapped for native aarch64 builds |
-| P-10 | First boot | Dashboard available immediately; SDK installs in the background; builds wait for it |
+| P-1 | Host | OCI Ampere aarch64, Ubuntu 22.04/24.04, 4 OCPU / 24 GB *(v1)* |
+| P-2 | Backend | Node.js 20+, standard library only |
+| P-3 | Frontend | ES modules + vendored CodeMirror 6 bundle (built by `editor/` in CI, committed) |
+| P-4 | Coolify / Compose | `runner` (host network) + `edge` relay (Coolify-routable) *(v1)* |
+| P-5 | systemd | `setup-ubuntu-arm64.sh`, Caddy/Nginx in front *(v1)* |
+| P-6 | Workspace | `WORKSPACES_DIR`: Docker `/workspace` (volume), systemd `/var/lib/android-runner/workspaces`; one folder per project |
+| P-7 | Persistence | SDK, Gradle cache, ADB key, build history/APKs, AI chat history, projects *(extends v1)* |
+| P-8 | ARM64 toolchain | box64 + Google's aapt2; native aarch64 aidl/zipalign; APK sanity check *(v1)* |
 
 ## 2. Access and security
 
-| ID | Item | Current behaviour |
+| ID | Item | Behaviour |
 |---|---|---|
-| S-1 | Login | One shared password. Auto-generated if `AUTH_PASSWORD` is empty (printed in logs) |
-| S-2 | Session | HttpOnly, SameSite=Strict cookie; Secure behind HTTPS; valid 7 days (`SESSION_TTL_HOURS=168`) |
-| S-3 | Brute force | 10 failed logins per IP, then a 15-minute lock |
-| S-4 | API token | Optional `API_TOKEN` (16+ characters) for scripts: `Authorization: Bearer …` |
-| S-5 | Command safety | Only fixed commands run; every input (task, device, package, level) is checked against an allowlist; no shell |
-| S-6 | Secrets | Never passed to Gradle/adb; signing passwords exist only during a release build |
-| S-7 | Browser protection | Origin check on changes, strict CSP, no framing |
-| S-8 | AI services | 9Router and Hermes are called only on their configured 127.0.0.1 URLs |
+| S-1 | Login | One password (auto-generated if unset), 7-day session, throttling *(v1)* |
+| S-2 | Agent token | Bearer token for MCP/REST; `MCP_TOKEN`/`API_TOKEN` or generated; shown and rotatable in Settings |
+| S-3 | Files | Confined to the project; no `..`, `.git/` or symlink escape; 2 MB read / 5 MB write limit |
+| S-4 | Git | Hooks off, `ext::` off, https only (file:// only in tests), token via `GIT_ASKPASS` |
+| S-5 | AI/agent edits | File edits only; never `.git`, `build/`, `.gradle`, wrapper jar, keystores, `local.properties` |
+| S-6 | Commands | Fixed argv, allowlisted inputs, no shell *(v1)* |
 
-## 3. Builds
+## 3. Project Hub (H)
 
-| ID | Item | Current behaviour |
+| ID | Item | Behaviour |
 |---|---|---|
-| B-1 | Tasks | `assembleDebug`, `assembleRelease`, `clean assembleDebug` (fixed list) |
-| B-2 | Options per build | Git Pull, Auto-Install, Auto-Launch, Auto-Notify Hermes, Open Logcat after launch |
-| B-3 | States | queued → pulling → building → installing → launching → succeeded / failed / cancelled |
-| B-4 | Concurrency | One build at a time; others queue |
-| B-5 | Cancel | Stops the whole Gradle process tree |
-| B-6 | Resource limits | Gradle `-Xmx4096m -XX:+UseG1GC`, Kotlin daemon `-Xmx3072m`, 3 workers, 45-minute timeout |
-| B-7 | APK check | APK must contain `AndroidManifest.xml` and `resources.arsc`, otherwise the build fails before install |
-| B-8 | Release signing | Optional keystore via `RELEASE_KEYSTORE_*`; without it release APKs are unsigned and are not auto-installed |
-| B-9 | History | Last 30 builds kept (`MAX_BUILD_HISTORY`) with log, APK, commit, duration, trigger (manual / webhook / api) |
-| B-10 | Restart | A build interrupted by a restart is marked failed |
-| B-11 | Push-to-deploy | GitHub / Gitea / GitLab webhook → pull, build `AUTO_BUILD_TASK`, install, launch. Pushes during a queued webhook build are merged |
-| B-12 | Live log | Streamed live; the last 5,000 lines replay after a page refresh |
+| H-1 | List | Cards: name, package, Compose/Views, version, git, last build state and age, APK download |
+| H-2 | New project | Name, package (suggested), template **Compose** or **XML Views**, minSdk 21-36 |
+| H-3 | Template stack | AGP 9.5.2, Gradle 9.9.2 (official wrapper, checksum-verified), Kotlin 2.4.21, compileSdk 37.2, targetSdk 37, JDK 17; Compose BOM 2026.11.01 / AppCompat 1.8.0, Material 1.14.0, ConstraintLayout 2.2.2. Pinned in `runner/templates/versions.json` |
+| H-4 | First commit | `git init -b main` + "Create … from the … template" |
+| H-5 | Clone | HTTPS URL + optional branch; private repos via `GIT_TOKEN` |
+| H-6 | Auto-discovery | Any folder in the workspace appears as a project |
+| H-7 | Rename / delete | Rename = display name; delete removes the folder after typing the id |
+| H-8 | Detection | Module, applicationId, version, min/targetSdk and UI toolkit read from the Gradle files |
 
-## 4. Device (phone)
+## 4. Editor (E)
 
-| ID | Item | Current behaviour |
+| ID | Item | Behaviour |
 |---|---|---|
-| D-1 | Connection | `<tunnel_ip>:<port>` via ADB over TCP; Connect / Disconnect / Reconnect / Restart ADB |
-| D-2 | Auto-reconnect | Every 20 s for `DEFAULT_DEVICE_ADDRESS`, backing off to 5 minutes when unreachable; paused after a manual disconnect |
-| D-3 | Device list | serial, state, model, product, transport |
-| D-4 | Actions | Install latest APK (or any APK from history), Launch, Force Stop, Clear App Data (with confirmation) |
-| D-5 | Screenshot | Capture, optional auto-refresh every 3 s, save as PNG |
-| D-6 | App target | One default package (`DEFAULT_PACKAGE_NAME`), changeable in the sidebar |
+| E-1 | Explorer | Lazy tree, build/hidden folders toggle, git colours, follows the active tab |
+| E-2 | File ops | New file/folder, rename/move (F2), delete (Del), copy path, add to AI context |
+| E-3 | Tabs | Multi-tab, dirty marker, middle-click close, restored per project |
+| E-4 | Languages | Kotlin, Java, XML, Gradle (kts and Groovy), JSON, properties/ProGuard, YAML, TOML, Markdown, shell |
+| E-5 | Editing | Search/replace, bracket matching, auto-close, folding, autocomplete (words), multi-cursor |
+| E-6 | Save | `Ctrl+S`; conflict check (asks before overwriting changes made by AI/git/Hermes); open tabs reload after external changes |
+| E-7 | Quick open / search | `Ctrl+P` fuzzy file open; `Ctrl+Shift+F` project text search |
+| E-8 | Fallback | Plain textarea if the editor bundle fails to load |
 
-## 5. Logcat
+## 5. Source control (G)
 
-| ID | Item | Current behaviour |
+| ID | Item | Behaviour |
 |---|---|---|
-| L-1 | Stream | Live, starting from the last 200 lines on the phone |
-| L-2 | Filters | Minimum level V/D/I/W/E, tag, keyword, package (filters by the app's process id when it is running) |
-| L-3 | Controls | Start/Stop, Pause/Resume, Clear (also clears the phone buffer), Export `.log`, autoscroll |
-| L-4 | Crash detection | `FATAL EXCEPTION`, `ANR in`, `Fatal signal` → red tab badge, toast, desktop notification |
-| L-5 | Capacity | Browser keeps the last 20,000 lines for export/AI, shows the last 5,000 |
+| G-1 | Status | Branch, ahead/behind, changed files with status letters; badge on the activity bar |
+| G-2 | Diff | Per file, in a read-only diff tab |
+| G-3 | Commit | All changes, `Ctrl+Enter` in the message box; identity from `GIT_USER_NAME`/`GIT_USER_EMAIL` |
+| G-4 | Pull / push | Pull fast-forward only; push sets upstream on first push |
+| G-5 | Branches | Switch or create |
+| G-6 | Discard | Restore a file (deletes it if untracked) |
 
-## 6. AI
+## 6. AI assistant (A)
 
-| ID | Item | Current behaviour |
+| ID | Item | Behaviour |
 |---|---|---|
-| A-1 | Analyze Error (9Router) | Sends the relevant part of a failed build log (Kotlin errors + "What went wrong", max 12,000 chars) |
-| A-2 | Triage Crash (9Router) | Sends the last crash stack trace from logcat |
-| A-3 | AI answer format | Root cause, affected files/classes, numbered fix steps, confidence |
-| A-4 | Model settings | `NINE_ROUTER_MODEL` (default `auto`), temperature 0.2, max 1,200 tokens, 90 s timeout |
-| A-5 | Investigate (Hermes) | Sends `{event, jobId, projectPath, packageName, deviceSerial, errorTail, crashSnippet, timestamp}` with `X-Webhook-Secret` |
-| A-6 | Auto-notify Hermes | Optional per build: failed builds are sent automatically |
-| A-7 | Limits | AI only explains; it cannot change code or run commands |
+| A-1 | Chat | Per-project conversation (last 40 messages kept), streamed answers, Stop button |
+| A-2 | Context | Project summary + file tree + open file + selection + added files + build script/manifest + optional last build error (budget `AI_CODE_CONTEXT_CHARS`, default 120k) |
+| A-3 | Edits | SEARCH/REPLACE blocks → diffs; tolerant of indentation; failed blocks listed, never half-applied per block |
+| A-4 | Apply | Per file, all, or **Apply & Run**; refuses if the file changed since the proposal |
+| A-5 | Undo | Restores the previous content (or deletes created files) |
+| A-6 | Fix with AI | From a failed build or a logcat crash |
+| A-7 | Send to Hermes | Webhook `event: agent_task` with project, task, files, error |
+| A-8 | Analysis | Analyze Error / Triage Crash (root cause, affected, fix steps) *(v1)* |
+| A-9 | Model | `NINE_ROUTER_MODEL`, temperature 0.2, `AI_CODE_MAX_TOKENS` (8000) |
 
-## 7. Dashboard
+## 7. Build & run (B)
 
-| ID | Area | Contents |
+| ID | Item | Behaviour |
 |---|---|---|
-| U-1 | Top bar | Environment badge (click for a detailed check table), AI status, device status, device address + Connect / Reconnect / Restart ADB, Logout |
-| U-2 | Sidebar | Variant, package, build option toggles, Build & Deploy, Cancel, history (APK download, Install, Re-run) |
-| U-3 | Tab: Build Console | State, timer, commit, live log, Download log, Analyze Error, Investigate |
-| U-4 | Tab: Device Logcat | Filters, controls, live log, Triage Crash, Investigate |
-| U-5 | Tab: Device Screen & Actions | Screenshot, auto-refresh, Save PNG, Install / Launch / Force Stop / Clear Data |
-| U-6 | Convenience | `Ctrl+Enter` builds; settings remembered in the browser; desktop notification when a build ends; title flashes when the tab is in the background |
-| U-7 | Layout | Desktop first; stacks into one column on phones |
+| B-1 | Run | ▶ Run / `Ctrl+Enter` / F5: save all → build → install → launch → open Logcat |
+| B-2 | Build only | ⚒ Build |
+| B-3 | Variants | `assembleDebug`, `assembleRelease`, `clean assembleDebug` *(v1)* |
+| B-4 | Queue | One build at a time across projects; top-bar pill shows which project is building |
+| B-5 | Options | Git pull before build, open Logcat after launch, notify Hermes on failure (remembered) |
+| B-6 | History | Last 30 builds per project, with log, APK, commit and trigger (manual/api/agent/webhook) |
+| B-7 | Push-to-deploy | Webhook matched to the project by repository URL or `?project=` *(extends v1)* |
+| B-8 | Signing / limits / timeout | `RELEASE_KEYSTORE_*`, 4 GB Gradle + 3 GB Kotlin, 3 workers, 45 min *(v1)* |
 
-## 8. Settings (environment variables)
+## 8. Bottom panel (L), scoped to the active project
 
-All optional. Full list with comments: `.env.example`.
+| ID | Item | Behaviour |
+|---|---|---|
+| L-1 | Build Output | Build history select, live log, timer, commit, APK/log download, clickable compiler errors |
+| L-2 | Logcat | Level/tag/keyword filters, "this app" (pid filter), pause, clear, export, crash detection |
+| L-3 | Device | On-demand screenshot (+ auto-refresh), install latest, launch, force stop, clear data |
+| L-4 | Layout | Resizable, collapsible (`Ctrl+\``), last tab remembered |
 
-| Group | Variables |
-|---|---|
-| Most used | `AUTH_PASSWORD`, `DEFAULT_PACKAGE_NAME`, `DEFAULT_DEVICE_ADDRESS`, `PROJECT_GIT_URL`, `PROJECT_GIT_BRANCH` |
-| AI | `NINE_ROUTER_URL`, `NINE_ROUTER_API_KEY`, `NINE_ROUTER_MODEL`, `HERMES_WEBHOOK_URL`, `HERMES_WEBHOOK_SECRET` |
-| Push-to-deploy | `GIT_WEBHOOK_SECRET`, `AUTO_BUILD_BRANCH`, `AUTO_BUILD_TASK`, `AUTO_BUILD_INSTALL`, `AUTO_BUILD_LAUNCH`, `AUTO_BUILD_NOTIFY_HERMES` |
-| Signing | `RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD` |
-| Limits | `GRADLE_JVM_ARGS`, `KOTLIN_DAEMON_JVM_ARGS`, `GRADLE_MAX_WORKERS`, `BUILD_TIMEOUT_MIN`, `MAX_BUILD_HISTORY` |
-| Toolchain | `SDK_PACKAGES`, `AAPT2_MODE`, `AAPT2_BINARY`, `JAVA_VERSION`, `APP_MODULE`, `INSTALL_BOX64` (image build) |
-| Server | `PORT`, `API_TOKEN`, `SESSION_TTL_HOURS`, `TRUST_PROXY`, `ADB_AUTO_RECONNECT`, `ADB_RECONNECT_INTERVAL_SEC` |
+## 9. Phone (D) *(v1)*
 
-## 9. API
+Connect by tunnel address, auto-reconnect with back-off, Reconnect / Restart ADB, device badge.
 
-Listed in `README.md` → API. Every dashboard action is available as a REST call; live data uses Server-Sent Events.
+## 10. Agent API (M)
 
-## 10. Quality checks
+| ID | Item | Behaviour |
+|---|---|---|
+| M-1 | MCP | `POST /mcp`, Streamable HTTP (stateless JSON), protocol 2024-11-05 … 2025-11-25 |
+| M-2 | REST | `GET /api/agent/tools`, `POST /api/agent/tools/<name>`; the token also works on the normal REST API |
+| M-3 | Tools | list_projects, project_info, list_files, read_file, search_code, write_file, apply_edits, undo_edits, git_status, git_diff, git_commit, git_pull, git_push, start_build (waitSeconds ≤ 900), get_build, list_builds, cancel_build, analyze_build_error, list_devices, connect_device, device_action, screenshot (image), logcat |
+| M-4 | Read-only mode | `MCP_ALLOW_WRITE=false` hides/blocks write tools |
+| M-5 | Reachability | Host: `127.0.0.1:3080/mcp`; containers: `https://<domain>/mcp` or the `edge` container on a shared network |
+
+## 11. Shortcuts
+
+`Ctrl+Enter`/F5 run · `Ctrl+S` save · `Ctrl+P` quick open · `Ctrl+Shift+F` search · `Ctrl+Shift+E` explorer ·
+`Ctrl+Shift+G` git · `Ctrl+I` AI · `` Ctrl+` `` bottom panel · editor: `Ctrl+F` find, `Ctrl+/` comment, `Alt+↑/↓` move line.
+
+## 12. Quality checks
 
 | ID | Check | Where |
 |---|---|---|
-| Q-1 | 22 unit + integration tests with fake adb / Gradle / 9Router / Hermes | `npm test`, every push |
-| Q-2 | Dashboard driven in a real browser, fails on any error; screenshots saved | CI |
-| Q-3 | Real Compose app built on arm64 in Docker: AGP 8.7 and latest AGP 9.5 / compileSdk 37.2, debug + signed release, verified with SDK tools | CI, every push + weekly |
-| Q-4 | Same on a fresh systemd install | CI |
-| Q-5 | Not covered by CI | A real phone over a tunnel, a real Coolify instance |
+| Q-1 | 36 unit + integration tests (v1 API, v2 IDE API, MCP) | `npm test`, every push |
+| Q-2 | IDE driven in Chromium: create project, edit, save, commit, AI apply, run, logcat, screenshot | CI |
+| Q-3 | Real builds on arm64 in Docker: AGP 8.7 sample + latest AGP; both templates; signed release | CI + weekly |
+| Q-4 | Same on a fresh systemd install, including a template build | CI |
+| Q-5 | Template Gradle wrapper matches the official checksum | CI |
+| Q-6 | Not covered | Real phone over a tunnel, a real Coolify instance, a real 9Router model, a real Hermes Agent |

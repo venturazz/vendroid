@@ -19,6 +19,7 @@ function gitEnv() {
     GIT_COMMITTER_NAME: config.gitUserName,
     GIT_COMMITTER_EMAIL: config.gitUserEmail,
     GIT_CONFIG_NOSYSTEM: '1',
+    GIT_OPTIONAL_LOCKS: '0', // status/diff never take index.lock, so they can't collide with commit/pull
   });
 }
 

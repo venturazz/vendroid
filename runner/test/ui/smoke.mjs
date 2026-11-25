@@ -67,6 +67,7 @@ const browser = await chromium.launch();
 const page = await (await browser.newContext({ viewport: { width: 1600, height: 960 }, colorScheme: 'dark' })).newPage();
 page.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
 page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+page.on('response', (r) => { if (r.status() >= 400 && !r.url().endsWith('/api/auth/login')) problems.push(`HTTP ${r.status()} ${r.request().method()} ${r.url().replace(base, '')}`); });
 let n = 0;
 const shot = (name) => page.screenshot({ path: path.join(OUT, `${String(++n).padStart(2, '0')}-${name}.png`) });
 const step = (s) => console.log(`[ui] ${s}`);
@@ -150,15 +151,23 @@ try {
   await shot('ai-proposal');
   await page.click('.proposal button:has-text("Apply all")');
   await page.waitForSelector('.proposal button:has-text("Undo"):not([hidden])');
-  await page.waitForFunction(() => document.querySelector('.cm-content')?.textContent.includes('You tapped'));
+  if (!fs.readFileSync(path.join(projDir(), 'app/src/main/java/dev/ui/test/MainActivity.kt'), 'utf8').includes('You tapped')) problems.push('apply did not reach disk');
+  await page.waitForFunction(() => [...document.querySelectorAll('.ed:not([hidden]) .cm-content')].some((e) => e.textContent.includes('You tapped')), null, { timeout: 5000 })
+    .catch(() => { throw new Error('open editor was not refreshed after AI apply'); });
+  if (await page.$('.tab.active.dirty')) problems.push('tab marked dirty after apply');
   await shot('ai-applied');
+
+  step('undo + re-apply');
+  await page.click('.proposal button:has-text("Undo")');
+  await page.waitForFunction(() => [...document.querySelectorAll('.ed:not([hidden]) .cm-content')].some((e) => e.textContent.includes('"Tapped $count times"')), null, { timeout: 5000 });
+  await page.click('.proposal button:has-text("Apply all")');
+  await page.waitForFunction(() => [...document.querySelectorAll('.ed:not([hidden]) .cm-content')].some((e) => e.textContent.includes('You tapped')), null, { timeout: 5000 });
 
   step('run: build, install, launch, logcat follows');
   await page.click('#quickConnect');
   await page.waitForSelector('#devBadge.ok', { timeout: 15000 });
   await page.click('#btnRun');
-  await page.waitForSelector('#bState.succeeded, [data-bpane=logcat]:not([hidden])', { timeout: 30000 });
-  await page.waitForSelector('[data-bpane=logcat]:not([hidden]) #lcLog div', { timeout: 20000 });
+  await page.waitForSelector('[data-bpane=logcat]:not([hidden]) #lcLog div', { timeout: 40000 });
   await shot('run-logcat');
   await page.click('.bottom-tabs [data-btab=build]');
   await page.waitForSelector('#bState.succeeded');
@@ -190,7 +199,7 @@ try {
   await page.setViewportSize({ width: 820, height: 900 });
   await shot('narrow');
 } catch (e) {
-  problems.push(`flow: ${e.message.split('\n')[0]}`);
+  problems.push(`flow: ${e.message.split('\n').slice(0, 4).join(' | ')}`);
   await shot('failure').catch(() => {});
 } finally {
   await browser.close();

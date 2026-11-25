@@ -1,7 +1,7 @@
 // AI coding panel: chat with 9Router about the active project, review proposed edits as diffs,
 // apply with one click (with undo), or hand the task to Hermes Agent.
 import { $, app, pApi, el, toast, guard, busy, postStream, renderDiff, emit, on, pref, setPref, actionButton } from './core.js';
-import { activeFile, selectionText, openTabs, openFile, saveAll } from './editor.js';
+import { selectionText, openTabs, openFile, saveAll, reloadFromDisk } from './editor.js';
 
 const extraContext = new Set();
 let sending = null; // AbortController
@@ -105,11 +105,13 @@ function proposalEl(p) {
     for (const f of r.files) applied.add(f.path);
     undoId = r.applyId;
     update();
+    await reloadFromDisk(r.files.map((f) => f.path));
     emit('files-changed', r.files.map((f) => f.path));
     emit('fs-changed');
     toast(`Applied ${r.files.length} file${r.files.length === 1 ? '' : 's'}`, 'ok');
     if (paths?.length === 1 || r.files.length === 1) openFile(r.files[0].path).catch(() => {});
     if (run) emit('run', { install: true });
+    setTimeout(update); // after actionButton re-enables the clicked button
   };
   const applyAll = actionButton({ class: 'primary small', text: `Apply all (${p.files.length})` }, () => doApply(null));
   const applyRun = actionButton({ class: 'small', text: '▶ Apply & Run', title: 'Apply all, then build, install and launch' }, () => doApply(null, true));
@@ -118,9 +120,11 @@ function proposalEl(p) {
     undoId = null;
     applied.clear();
     update();
+    await reloadFromDisk(r.files);
     emit('files-changed', r.files);
     emit('fs-changed');
     toast('Reverted', 'ok');
+    setTimeout(update);
   });
   header.append(el('b', { text: `Proposed changes · ${p.files.length} file${p.files.length === 1 ? '' : 's'}` }), el('span', { class: 'grow' }), undoBtn, applyRun, applyAll);
   card.append(header);
