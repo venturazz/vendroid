@@ -1,6 +1,6 @@
 # Vendroid: specification (as built)
 
-Version 2.0, branch `feat/android-remote-runner`. Each item has an ID, so you can request a change precisely
+Version 2.1, branch `feat/android-remote-runner`. Each item has an ID, so you can request a change precisely
 ("change E-4", "remove G-6", "add a new H-section"). Items marked *(v1)* are unchanged from version 1.
 
 ## 0. Scope
@@ -93,12 +93,31 @@ Version 2.0, branch `feat/android-remote-runner`. Each item has an ID, so you ca
 |---|---|---|
 | B-1 | Run | ▶ Run / `Ctrl+Enter` / F5: save all → build → install → launch → open Logcat |
 | B-2 | Build only | ⚒ Build |
-| B-3 | Variants | `assembleDebug`, `assembleRelease`, `clean assembleDebug` *(v1)* |
+| B-3 | Variants | `assembleDebug`, `assembleRelease`, `clean assembleDebug`, `bundleRelease` (.aab) |
 | B-4 | Queue | One build at a time across projects; top-bar pill shows which project is building |
 | B-5 | Options | Git pull before build, open Logcat after launch, notify Hermes on failure (remembered) |
 | B-6 | History | Last 30 builds per project, with log, APK, commit and trigger (manual/api/agent/webhook) |
 | B-7 | Push-to-deploy | Webhook matched to the project by repository URL or `?project=` *(extends v1)* |
 | B-8 | Signing / limits / timeout | `RELEASE_KEYSTORE_*`, 4 GB Gradle + 3 GB Kotlin, 3 workers, 45 min *(v1)* |
+
+## 7b. Publish to Google Play (R)
+
+Requirements checked against Google's rules as of Nov 2026 ([target API](https://developer.android.com/google/play/requirements/target-sdk),
+[16 KB pages](https://developer.android.com/guide/practices/page-sizes)). `PLAY_TARGET_SDK` raises the target level when Google does.
+
+| ID | Check / feature | Behaviour |
+|---|---|---|
+| R-1 | Target API | targetSdk ≥ 36 (Android 16) for new apps and updates. **Fail** below, with a one-click "Set targetSdk 36" |
+| R-2 | Application ID | Fails on reserved `com.example.*` / `android.*` ids, and warns that the id is permanent |
+| R-3 | Version | versionCode must not be lower than, or the same as, an earlier bundle. One-click **+ patch / + minor / + major** (code +1, semver name) |
+| R-4 | Upload key | Per-project key: **Generate** (RSA 4096, PKCS12, ~27 years) or **Import** (.jks/.p12, verified). Stored in DATA_DIR (0600), never in the project or git. Backup download, password reveal, SHA-256/SHA-1 for Firebase and App Links. Overrides `RELEASE_KEYSTORE_*` |
+| R-5 | Signed bundle | New task `bundleRelease` → signed `.aab` (download from Publish or history). Bundles can't be installed with adb, so use assembleRelease to test |
+| R-6 | 16 KB pages | Reads every 64-bit `.so` in the AAB/APK (ELF PT_LOAD alignment ≥ 16384 and zip alignment) and names the libraries that fail |
+| R-7 | Release safety | Fails on `isDebuggable = true`; recommends R8 (`isMinifyEnabled`) |
+| R-8 | Permissions | Flags restricted permissions (SMS/Call log, all files, background location, photos/videos, install packages, accessibility, exact alarm, full-screen intent, foreground-service types…) with the Play policy that applies |
+| R-9 | Size | Warns above 200 MB (base module limit) |
+| R-10 | Console-only tasks | Reminder list: privacy policy, Data safety, content rating, store graphics, 12 testers × 14 days for new personal accounts |
+| R-11 | Agents | MCP tool `play_check`; `start_build task=bundleRelease` |
 
 ## 8. Bottom panel (L), scoped to the active project
 
@@ -119,7 +138,7 @@ Connect by tunnel address, auto-reconnect with back-off, Reconnect / Restart ADB
 |---|---|---|
 | M-1 | MCP | `POST /mcp`, Streamable HTTP (stateless JSON), protocol 2024-11-05 … 2025-11-25 |
 | M-2 | REST | `GET /api/agent/tools`, `POST /api/agent/tools/<name>`; the token also works on the normal REST API |
-| M-3 | Tools | list_projects, project_info, list_files, read_file, search_code, write_file, apply_edits, undo_edits, git_status, git_diff, git_commit, git_pull, git_push, start_build (waitSeconds ≤ 900), get_build, list_builds, cancel_build, analyze_build_error, list_devices, connect_device, device_action, screenshot (image), logcat |
+| M-3 | Tools | list_projects, project_info, list_files, read_file, search_code, write_file, apply_edits, undo_edits, git_status, git_diff, git_commit, git_pull, git_push, start_build (waitSeconds ≤ 900), get_build, play_check, list_builds, cancel_build, analyze_build_error, list_devices, connect_device, device_action, screenshot (image), logcat |
 | M-4 | Read-only mode | `MCP_ALLOW_WRITE=false` hides/blocks write tools |
 | M-5 | Reachability | Host: `127.0.0.1:3080/mcp`; containers: `https://<domain>/mcp` or the `edge` container on a shared network |
 
@@ -132,9 +151,9 @@ Connect by tunnel address, auto-reconnect with back-off, Reconnect / Restart ADB
 
 | ID | Check | Where |
 |---|---|---|
-| Q-1 | 36 unit + integration tests (v1 API, v2 IDE API, MCP) | `npm test`, every push |
+| Q-1 | 39 unit + integration tests (v1 API, v2 IDE API, MCP, Play checks/signing) | `npm test`, every push |
 | Q-2 | IDE driven in Chromium: create project, edit, save, commit, AI apply, run, logcat, screenshot | CI |
-| Q-3 | Real builds on arm64 in Docker: AGP 8.7 sample + latest AGP; both templates; signed release | CI + weekly |
+| Q-3 | Real builds on arm64 in Docker: AGP 8.7 sample + latest AGP; both templates; signed release; signed .aab with a generated upload key passing the Play checks | CI + weekly |
 | Q-4 | Same on a fresh systemd install, including a template build | CI |
 | Q-5 | Template Gradle wrapper matches the official checksum | CI |
 | Q-6 | Not covered | Real phone over a tunnel, a real Coolify instance, a real 9Router model, a real Hermes Agent |

@@ -13,7 +13,13 @@ if [ -f "$D/FAIL" ]; then
 fi
 [ -f "$D/SLOW" ] && sleep 30
 variant=debug
-case "$*" in *assembleRelease*) variant=release ;; esac
+case "$*" in *assembleRelease*|*bundleRelease*) variant=release ;; esac
+case "$*" in *bundleRelease*)
+  mkdir -p "$D/app/build/outputs/bundle/release"
+  cp "$D/FAKE_AAB" "$D/app/build/outputs/bundle/release/app-release.aab" || exit 1
+  echo "signing-props: $(grep -c '^android.injected.signing' "$GRADLE_USER_HOME/gradle.properties")"
+  echo "BUILD SUCCESSFUL in 1s"; exit 0 ;;
+esac
 mkdir -p "$D/app/build/outputs/apk/$variant"
 # Real (tiny) ZIPs: a valid APK layout, or one missing the manifest when BROKEN exists.
 GOOD_APK='UEsDBBQAAAAAAFMYeV1o8gHhAQAAAAEAAAATAAAAQW5kcm9pZE1hbmlmZXN0LnhtbG1QSwMEFAAAAAAAUxh5XZ3/CWwBAAAAAQAAAA4AAAByZXNvdXJjZXMuYXJzY3JQSwMEFAAAAAAAUxh5XcxK3ZgBAAAAAQAAAAsAAABjbGFzc2VzLmRleGRQSwECFAMUAAAAAABTGHldaPIB4QEAAAABAAAAEwAAAAAAAAAAAAAAgAEAAAAAQW5kcm9pZE1hbmlmZXN0LnhtbFBLAQIUAxQAAAAAAFMYeV2d/wlsAQAAAAEAAAAOAAAAAAAAAAAAAACAATIAAAByZXNvdXJjZXMuYXJzY1BLAQIUAxQAAAAAAFMYeV3MSt2YAQAAAAEAAAALAAAAAAAAAAAAAACAAV8AAABjbGFzc2VzLmRleFBLBQYAAAAAAwADALYAAACJAAAAAAA='

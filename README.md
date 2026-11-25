@@ -62,9 +62,15 @@ Full feature list with IDs: **[docs/SPEC.md](docs/SPEC.md)**.
 - Logcat: level/tag/keyword/"this app" filters, crash detection.
 - Device: on-demand screenshot and app actions.
 
+**Publish to Google Play**
+- A readiness checklist against Play's current rules: target API 36, unique application id, version code, signed
+  `.aab`, 16 KB page-size support of native libraries, no debuggable release, restricted permissions, and a size limit.
+- One-click fixes: set targetSdk, bump the version, and generate or import a per-project upload key (with backup and SHA fingerprints).
+- **Build signed AAB** produces a bundle ready to upload.
+
 **Agents**
 - `POST /mcp` (MCP Streamable HTTP) and `/api/agent/tools/*` (REST) with a bearer token.
-- 23 tools: projects, files, search, edits (with undo), git, builds (blocking wait), devices, install/launch/stop/clear,
+- 24 tools (incl. `play_check`): projects, files, search, edits (with undo), git, builds (blocking wait), devices, install/launch/stop/clear,
   screenshot (image), logcat, 9Router analysis.
 
 **Kept from v1:** the ARM64 toolchain (box64 + Google's aapt2, native aarch64 build tools), resource caps, ADB tunnel
@@ -115,6 +121,6 @@ code on the VM. Treat the password and token like SSH keys.
 ## Development
 
 ```bash
-cd runner && npm test     # 36 unit + integration tests (fake adb/gradlew/9Router/Hermes), ~10 s
+cd runner && npm test     # 39 unit + integration tests (fake adb/gradlew/9Router/Hermes), ~10 s
 ```
 The browser test (`test/ui/smoke.mjs`) and the real ARM64 builds run in CI.

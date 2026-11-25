@@ -76,12 +76,36 @@ if [ "${E2E_TEMPLATES:-0}" = "1" ]; then
   done
 fi
 
+# ---- Google Play: upload key -> signed bundleRelease -> readiness checks on the real .aab
+if [ "${E2E_TEMPLATES:-0}" = "1" ]; then
+  echo "--- Play: upload key + signed AAB for ci-compose" >&2
+  api -X POST -d '{"name":"Vendroid CI","country":"ID"}' "$BASE/api/projects/ci-compose/signing/generate" | j '{alias:o.alias,owner:o.owner}'
+  bid="$(api -X POST -d '{"task":"bundleRelease"}' "$BASE/api/projects/ci-compose/builds" | j o.id)"
+  for _ in $(seq 1 360); do
+    st="$(api "$BASE/api/builds/$bid" | j o.state)"
+    case "$st" in succeeded|failed|cancelled) break ;; esac
+    sleep 5
+  done
+  api "$BASE/api/builds/$bid/log" > "$OUT/template-compose-aab.log"
+  if [ "$st" != "succeeded" ]; then echo "bundleRelease: $st" >&2; tail -n 100 "$OUT/template-compose-aab.log" >&2; exit 1; fi
+  [ "$(api "$BASE/api/builds/$bid" | j o.signed)" = "true" ] || { echo "bundle not signed"; exit 1; }
+  curl -fsS -b "$JAR" -o "$OUT/template-compose.aab" "$BASE/api/builds/$bid/apk"
+  unzip -l "$OUT/template-compose.aab" | grep -q 'base/manifest/AndroidManifest.xml' || { echo "not an app bundle"; exit 1; }
+  unzip -l "$OUT/template-compose.aab" | grep -qE 'META-INF/[A-Z0-9_]+\.(RSA|SF)' || { echo "bundle has no signature"; exit 1; }
+  api "$BASE/api/projects/ci-compose/play" > "$OUT/play.json"
+  j 'o.checks.map(c=>c.status.padEnd(5)+" "+c.title+": "+c.detail.split("\n")[0]).join("\n")' < "$OUT/play.json"
+  for id in target-sdk signing bundle page-size debuggable; do
+    st="$(j "o.checks.find(c=>c.id==='$id').status" < "$OUT/play.json")"
+    [ "$st" = "pass" ] || { echo "Play check $id: $st"; exit 1; }
+  done
+fi
+
 # ---- v2: MCP endpoint answers with the agent token
 TOKEN="$(api "$BASE/api/agent/info" | j o.token)"
 tools="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$BASE/mcp" | j 'o.result.tools.length')"
 echo "--- MCP tools: $tools"
-[ "$tools" -ge 15 ] || { echo "MCP tools/list failed"; exit 1; }
+[ "$tools" -ge 24 ] || { echo "MCP tools/list failed"; exit 1; }
 
 echo "--- e2e OK (artifacts in $OUT)"
 echo "PKG=$PKG"

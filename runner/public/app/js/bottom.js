@@ -136,7 +136,7 @@ function observe(b) {
   if (TERMINAL.includes(b.state)) {
     followAfter.delete(b.id);
     const dur = b.startedAt && b.finishedAt ? ` in ${fmtDur(Date.parse(b.finishedAt) - Date.parse(b.startedAt))}` : '';
-    const msg = b.state === 'succeeded' ? `✅ ${b.projectName || ''} built${dur}` : b.state === 'failed' ? `❌ ${b.projectName || ''} build failed${dur}` : '⏹ Build cancelled';
+    const msg = b.state === 'succeeded' ? `✅ ${b.projectName || ''} ${b.artifactType === 'aab' ? 'bundle (.aab) ready' : 'built'}${dur}` : b.state === 'failed' ? `❌ ${b.projectName || ''} build failed${dur}` : '⏹ Build cancelled';
     notify(msg, `${b.task}${b.error ? ` - ${b.error}` : ''}`);
     if (b.projectId === app.project?.id) toast(b.state === 'failed' ? `${msg}: ${b.error || ''}` : msg, b.state === 'failed' ? 'err' : b.state === 'succeeded' ? 'ok' : '');
   }
@@ -168,10 +168,10 @@ export async function startBuild({ install = true } = {}) {
   const p = app.project;
   const dev = app.devices.find((d) => d.state === 'device')?.serial || $('quickTarget').value.trim() || app.cfg.defaultDevice;
   const task = $('task').value;
-  const unsignedRelease = task === 'assembleRelease' && !app.cfg.releaseSigning;
-  const doInstall = install && !!dev && !unsignedRelease && !!p.packageName;
-  if (install && !dev) toast('No phone connected: building only. Connect a device to install and launch.');
-  else if (install && unsignedRelease) toast('Release signing is not configured: building an unsigned APK without installing.');
+  const bundle = task === 'bundleRelease';
+  const doInstall = install && !!dev && !bundle && !!p.packageName;
+  if (install && bundle) toast('Building an .aab for Google Play (bundles are uploaded, not installed). Use assembleDebug to run on the phone.');
+  else if (install && !dev) toast('No phone connected: building only. Connect a device to install and launch.');
   const body = {
     task,
     gitPullBeforeBuild: $('oGit').checked,

@@ -26,7 +26,7 @@ test('serials and packages reject shell metacharacters and option injection', ()
 });
 
 test('build tasks are an exact allowlist', () => {
-  assert.deepEqual(Object.keys(TASKS), ['assembleDebug', 'assembleRelease', 'clean assembleDebug']);
+  assert.deepEqual(Object.keys(TASKS), ['assembleDebug', 'assembleRelease', 'clean assembleDebug', 'bundleRelease']);
   for (const bad of ['assembleDebug ', 'assembleDebug --init-script x', 'tasks', '__proto__', 'constructor']) {
     assert.equal(isTask(bad), false, bad);
   }

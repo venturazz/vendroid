@@ -5,6 +5,7 @@ import * as ai from '../ai.js';
 import { envHealth } from '../health.js';
 import { HttpError, LEVELS } from '../validate.js';
 import { TEMPLATE_IDS } from '../projects.js';
+import { PLAY_TARGET_SDK } from '../play.js';
 
 export function register(router, { watchdog, clientIp }) {
   router.get('/healthz', (req, res) => sendJson(res, 200, { ok: true }), { public: true });
@@ -27,7 +28,8 @@ export function register(router, { watchdog, clientIp }) {
   router.get('/api/ai/status', async (req, res) => sendJson(res, 200, await ai.aiStatus()));
   router.get('/api/config', (req, res) => sendJson(res, 200, {
     defaultDevice: config.defaultDevice, levels: LEVELS,
-    tasks: ['assembleDebug', 'assembleRelease', 'clean assembleDebug'],
+    tasks: ['assembleDebug', 'assembleRelease', 'clean assembleDebug', 'bundleRelease'],
+    playTargetSdk: PLAY_TARGET_SDK,
     templates: TEMPLATE_IDS,
     releaseSigning: config.signingEnabled(),
     gitTokenConfigured: !!config.gitToken,

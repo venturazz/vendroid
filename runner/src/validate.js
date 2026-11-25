@@ -3,6 +3,8 @@ export const TASKS = Object.freeze({
   assembleDebug: { args: ['assembleDebug'], variant: 'debug' },
   assembleRelease: { args: ['assembleRelease'], variant: 'release' },
   'clean assembleDebug': { args: ['clean', 'assembleDebug'], variant: 'debug' },
+  // Android App Bundle for Google Play (not installable with adb)
+  bundleRelease: { args: ['bundleRelease'], variant: 'release', artifact: 'aab' },
 });
 
 export const LEVELS = ['V', 'D', 'I', 'W', 'E'];

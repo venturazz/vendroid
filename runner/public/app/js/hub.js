@@ -27,7 +27,7 @@ function card(p, queue) {
   );
   const acts = el('div', { class: 'acts' },
     el('button', { class: 'primary', text: 'Open', onclick: (e) => { e.stopPropagation(); open(); } }),
-    lb?.apk ? el('a', { class: 'btn', href: `/api/builds/${lb.id}/apk`, text: '⬇ APK', onclick: (e) => e.stopPropagation() }) : null,
+    lb?.apk ? el('a', { class: 'btn', href: `/api/builds/${lb.id}/apk`, text: `⬇ ${lb.apk.type === 'aab' ? 'AAB' : 'APK'}`, onclick: (e) => e.stopPropagation() }) : null,
     el('span', { class: 'grow' }),
     el('button', { class: 'ghost', title: 'Rename', text: '✎', onclick: guard(async (e) => {
       e.stopPropagation();

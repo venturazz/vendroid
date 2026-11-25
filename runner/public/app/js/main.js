@@ -7,6 +7,7 @@ import { refreshGit } from './git.js';
 import { loadAi, toggleAi, restoreDraft } from './ai.js';
 import { refreshBuilds, startBuild, cancelBuild, resetBottom, toggleBottom } from './bottom.js';
 import { openSettings } from './settings.js';
+import { refreshPublish } from './publish.js';
 
 // ---------------------------------------------------------------- top bar status
 function badge(node, text, cls, title) {
@@ -127,6 +128,7 @@ function showView(view) {
   setPref('view', view);
   if (view === 'git') refreshGit();
   if (view === 'search') focusSearch();
+  if (view === 'publish') refreshPublish();
 }
 document.querySelectorAll('.activitybar [data-view]').forEach((b) => b.addEventListener('click', () => {
   if (b.classList.contains('active') && !$('sidebar').hidden) { $('sidebar').hidden = true; b.classList.remove('active'); return; }
@@ -228,7 +230,7 @@ async function openProject(id) {
   showView(pref('view', 'explorer'));
   resetExplorer();
   resetBottom();
-  await Promise.all([restoreTabs(), refreshGit(), refreshBuilds(), loadAi()]);
+  await Promise.all([restoreTabs(), refreshGit(), refreshBuilds(), loadAi(), refreshPublish()]);
   restoreDraft();
   toggleAi(pref('aiOpen', false));
   if (!p.hasGradlew && p.android) toast('This project has no gradlew wrapper: builds need ./gradlew in the project root.', 'err');

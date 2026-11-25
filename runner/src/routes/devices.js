@@ -35,6 +35,7 @@ export function register(router, { builds, projects, watchdog }) {
     const action = body.action;
     if (action === 'install') {
       const b = body.buildId ? builds.get(body.buildId) : builds.latestApk(body.projectId || undefined);
+      if (b?.artifactType === 'aab') throw bad('An .aab cannot be installed with adb; build assembleRelease or assembleDebug for the phone');
       const apk = b && builds.apkPath(b);
       if (!apk) throw new HttpError(404, 'No built APK available to install; build the project first');
       const r = await adbm.installApk(serial, apk);

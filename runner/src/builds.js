@@ -6,7 +6,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, aapt2Path, bootstrapState } from './config.js';
 import { ensureGradleProperties } from './gradleProps.js';
-import { apkProblem } from './apkcheck.js';
+import { apkProblem, zipEntries } from './apkcheck.js';
+import { signingFor } from './signing.js';
+import { inspectProject } from './projects.js';
 import { childEnv, lineSplitter, killGroup, run } from './exec.js';
 import * as adbm from './adb.js';
 import { notifyHermes, sliceBuildError } from './ai.js';
@@ -17,6 +19,14 @@ const ASKPASS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..',
 const KEEP_BUFFERS = 5;
 
 class Cancelled extends Error {}
+
+/** An .aab must contain the base module manifest and resource table (protobuf format). */
+function aabProblem(file) {
+  let names;
+  try { names = new Set(zipEntries(file)); } catch (e) { return `AAB is not a valid ZIP (${e.message})`; }
+  const missing = ['base/manifest/AndroidManifest.xml', 'base/resources.pb'].filter((n) => !names.has(n));
+  return missing.length ? `App bundle is missing ${missing.join(' and ')}` : null;
+}
 
 
 export class BuildManager {
@@ -52,7 +62,7 @@ export class BuildManager {
 
   view(b) {
     const { apkFile, ...rest } = b;
-    return { ...rest, apk: apkFile ? { name: path.basename(apkFile), size: b.apkSize } : null };
+    return { ...rest, apk: apkFile ? { name: path.basename(apkFile), size: b.apkSize, type: b.artifactType || 'apk' } : null };
   }
   list(projectId) {
     return [...this.builds.values()]
@@ -74,7 +84,7 @@ export class BuildManager {
   /** Most recent succeeded build that produced an APK (optionally for a variant). */
   latestApk(projectId) {
     return [...this.builds.values()]
-      .filter((b) => b.state === 'succeeded' && b.apkFile && (!projectId || b.projectId === projectId))
+      .filter((b) => b.state === 'succeeded' && b.apkFile && b.artifactType !== 'aab' && (!projectId || b.projectId === projectId))
       .sort((a, c) => c.createdAt.localeCompare(a.createdAt))[0] || null;
   }
   apkPath(b) {
@@ -110,15 +120,19 @@ export class BuildManager {
       throw bad('A device serial/address is required for auto-install / auto-launch');
     }
     if (options.autoLaunchAfterInstall && !packageName) throw bad('A package name is required for auto-launch');
-    if (TASKS[body.task].variant === 'release' && !config.signingEnabled() && options.autoInstallAfterBuild) {
-      throw bad('Release APKs are unsigned until RELEASE_KEYSTORE_PATH / _PASSWORD / RELEASE_KEY_ALIAS are set; '
+    if (TASKS[body.task].artifact === 'aab' && options.autoInstallAfterBuild) {
+      throw bad('App bundles (.aab) are uploaded to Google Play, not installed with adb; build assembleRelease to test on the phone');
+    }
+    if (TASKS[body.task].variant === 'release' && !signingFor(project.id) && options.autoInstallAfterBuild) {
+      throw bad('Release builds are unsigned until the project has an upload key (Publish → Upload key) or RELEASE_KEYSTORE_* is set; '
         + 'turn off Auto-Install or configure signing');
     }
 
     const id = `b${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
     const b = {
       id, projectId: project.id, projectName: project.name, task: body.task, options, deviceSerial, packageName, trigger, ref, commit: null,
-      signed: TASKS[body.task].variant === 'release' ? config.signingEnabled() : null,
+      signed: TASKS[body.task].variant === 'release' ? !!signingFor(project.id) : null,
+      artifactType: TASKS[body.task].artifact || 'apk',
       state: 'queued', createdAt: new Date().toISOString(),
       startedAt: null, finishedAt: null, exitCode: null, error: null,
       apkFile: null, apkSize: null, hermes: null, lineCount: 0,
@@ -272,10 +286,16 @@ export class BuildManager {
       if (b.commit) this.#line(b, `Commit: ${b.commit.sha} ${b.commit.subject}`);
 
       this.#setState(b, 'building');
+      const info = inspectProject(root);
+      b.versionCode = info.versionCode;
+      b.versionName = info.versionName;
+      b.targetSdk = info.targetSdk;
+      const sign = TASKS[b.task].variant === 'release' ? signingFor(b.projectId) : null;
+      b.signed = TASKS[b.task].variant === 'release' ? !!sign : null;
       if (TASKS[b.task].variant === 'release') {
-        this.#line(b, b.signed
-          ? `Release signing: keystore ${path.basename(config.signing.storeFile)}, alias ${config.signing.keyAlias}`
-          : 'Release signing: not configured (set RELEASE_KEYSTORE_*); APK will be unsigned and cannot be installed');
+        this.#line(b, sign
+          ? `Release signing: ${sign.source === 'project' ? 'project upload key' : `keystore ${path.basename(sign.storeFile)}`}, alias ${sign.keyAlias}`
+          : 'Release signing: not configured (Publish → Upload key); the artifact will be unsigned');
       }
       try { fs.chmodSync(path.join(root, 'gradlew'), 0o755); } catch { /* best effort */ }
       const gradleArgs = [
@@ -287,24 +307,24 @@ export class BuildManager {
       ];
       const aapt2 = aapt2Path();
       if (aapt2) gradleArgs.push(`-Pandroid.aapt2FromMavenOverride=${aapt2}`);
-      if (b.signed) ensureGradleProperties({ signing: true });
+      if (sign) ensureGradleProperties({ signing: sign });
       let code;
       try {
         code = await this.#exec(b, ctx, path.join(root, 'gradlew'), gradleArgs, {
           cwd: root, env, timeoutMs: config.buildTimeoutMs,
         });
       } finally {
-        if (b.signed) ensureGradleProperties(); // drop the signing secrets again
+        if (sign) ensureGradleProperties(); // drop the signing secrets again
       }
       check();
       b.exitCode = code;
       if (code !== 0) throw new Error(`Gradle exited with code ${code}`);
 
       const apk = this.#collectApk(b, root, project.module);
-      if (!apk) throw new Error('Build succeeded but no APK was found under build/outputs/apk');
-      const problem = apkProblem(path.join(config.artifactsDir, apk.file));
+      if (!apk) throw new Error(`Build succeeded but no ${b.artifactType === "aab" ? ".aab under build/outputs/bundle" : "APK under build/outputs/apk"} was found`);
+      const problem = b.artifactType === 'aab' ? aabProblem(path.join(config.artifactsDir, apk.file)) : apkProblem(path.join(config.artifactsDir, apk.file));
       if (problem) throw new Error(problem);
-      this.#line(b, `APK: ${path.basename(apk.file)} (${(apk.size / 1e6).toFixed(1)} MB)`);
+      this.#line(b, `${b.artifactType === 'aab' ? 'AAB' : 'APK'}: ${path.basename(apk.file)} (${(apk.size / 1e6).toFixed(1)} MB)`);
 
       if (b.options.autoInstallAfterBuild) {
         this.#setState(b, 'installing');
@@ -371,7 +391,8 @@ export class BuildManager {
 
   #collectApk(b, projectRoot, module) {
     const variant = TASKS[b.task].variant;
-    const root = path.join(projectRoot, ...module.split(':'), 'build', 'outputs', 'apk');
+    const ext = b.artifactType === 'aab' ? '.aab' : '.apk';
+    const root = path.join(projectRoot, ...module.split(':'), 'build', 'outputs', ext === '.aab' ? 'bundle' : 'apk');
     const found = [];
     const walk = (dir, depth) => {
       let ents;
@@ -379,7 +400,7 @@ export class BuildManager {
       for (const e of ents) {
         const p = path.join(dir, e.name);
         if (e.isDirectory() && depth < 4) walk(p, depth + 1);
-        else if (e.isFile() && e.name.endsWith('.apk') && !/androidTest/i.test(p)
+        else if (e.isFile() && e.name.endsWith(ext) && !/androidTest/i.test(p)
           && path.relative(root, p).split(path.sep).some((s) => s.toLowerCase().endsWith(variant))) {
           found.push({ p, mtime: fs.statSync(p).mtimeMs, size: fs.statSync(p).size });
         }

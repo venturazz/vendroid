@@ -7,6 +7,7 @@
 5. [Verify builds, 9Router and Hermes](#5-verify-builds-9router-and-hermes)
 6. [Optional: push-to-deploy, release signing, API token](#6-optional-features)
 6a. [Using the IDE](#6a-using-the-ide)
+6a-2. [Publish to Google Play](#6a-2-publish-to-google-play)
 6b. [Connect Hermes Agent (MCP)](#6b-connect-hermes-agent-mcp)
 6c. [Upgrading from v1 (single project)](#6c-upgrading-from-v1-single-project)
 7. [ARM64 aapt2 details](#7-arm64-aapt2-details)
@@ -154,6 +155,24 @@ The runner uses AGP's injected-signing properties, the mechanism Android Studio 
    assistant with the failure.
 5. **Source Control** (⎇): click a file for its diff, write a message, then **Commit**, **Pull** or **Push**. Use the branch button to
    switch or create a branch (e.g. `ai/login-screen` before a big AI change).
+
+## 6a-2. Publish to Google Play
+
+1. Open **🚀 Publish**. Each check shows ✔ / ▲ / ✖, with the reason and a fix button where one exists.
+2. Fix the blockers. Typical first-time list:
+   - *Target API 36+*: **Set targetSdk 36**, then test (Android 16 behaviour changes apply).
+   - *Unique application ID*: change `com.example.*` to a domain you own. This can't change after the first upload.
+   - *Upload key*: **Generate upload key**, then **download the keystore and save the password** (password manager). With
+     Play App Signing (the default for new apps), Google holds the app signing key and this is only the upload key, so a
+     lost upload key can be reset by Play support.
+3. **+ patch / + minor / + major** before each new upload. Play rejects a versionCode it has already seen.
+4. **📦 Build signed AAB**, then **⬇ Download .aab**. In Play Console go to *Test and release* → *Create release* → upload.
+5. The checklist's last item lists what only Play Console can do: privacy policy, Data safety form, content rating,
+   store graphics, and for new personal developer accounts a closed test with 12+ testers for 14 days.
+
+The 16 KB check reads the native libraries inside the bundle. If it names a library (usually from an SDK such as an
+ads, maps, database or video SDK), update that dependency; NDK code needs NDK r28+ or `-Wl,-z,max-page-size=16384`.
+Updates that fail this check can't be released from 2027-02-01.
 
 ## 6b. Connect Hermes Agent (MCP)
 

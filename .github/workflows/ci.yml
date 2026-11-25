@@ -121,6 +121,8 @@ jobs:
               docker compose cp "${{ runner.temp }}/e2e/template-$t.apk" runner:/tmp/template-$t.apk
               docker compose exec -T runner bash /ci/verify-apk.sh /tmp/template-$t.apk dev.ci.$t
             done
+            docker compose cp "${{ runner.temp }}/e2e/template-compose.aab" runner:/tmp/template.aab
+            docker compose exec -T runner sh -c 'jarsigner -verify /tmp/template.aab | tail -n 2 && jarsigner -verify -verbose -certs /tmp/template.aab | grep -m1 "CN=Vendroid CI"'
           fi
       - name: Edge relay serves the dashboard
         run: |

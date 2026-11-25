@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { aab } from '../fixtures/zip.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, '..', 'fixtures');
@@ -53,6 +54,7 @@ const server = spawn(process.execPath, [path.join(HERE, '..', '..', 'src', 'serv
     GRADLE_USER_HOME: path.join(tmp, 'gradle'), ADB_BIN: path.join(tmp, 'bin', 'adb'), FAKE_STATE: path.join(tmp, 'adb'),
     AAPT2_BINARY: '/bin/true', DEFAULT_DEVICE_ADDRESS: '10.147.17.5:5555',
     NINE_ROUTER_URL: `http://127.0.0.1:${nr.address().port}/v1`, GIT_USER_NAME: 'UI Test', GIT_USER_EMAIL: 'ui@test',
+    ...(process.env.JAVA_HOME ? { JAVA_HOME: process.env.JAVA_HOME } : {}),
   },
   stdio: 'inherit',
 });
@@ -199,6 +201,21 @@ try {
   await page.click('#scCapture');
   await page.waitForSelector('#scSave:not([hidden])');
   await shot('device');
+
+  step('publish: Play checklist, upload key, signed AAB');
+  fs.writeFileSync(path.join(projDir(), 'FAKE_AAB'), aab(16384));
+  await page.click('.activitybar [data-view=publish]');
+  await page.waitForSelector('.pcheck.pass:has-text("Target API 36+")');
+  await page.waitForSelector('.pcheck.fail:has-text("Upload key")');
+  await shot('publish-checklist');
+  await page.fill('#keyName', 'UI Tester');
+  await page.click('.keycard button:has-text("Generate upload key")');
+  await page.waitForSelector('.pcheck.pass:has-text("Upload key")', { timeout: 30000 });
+  await page.waitForSelector('.keycard .fp:has-text("SHA-256")');
+  await page.click('.play-sum button:has-text("Build signed AAB")');
+  await page.waitForSelector('.keycard:has-text("Latest bundle") a:has-text("Download .aab")', { timeout: 30000 });
+  await page.waitForSelector('.pcheck.pass:has-text("16 KB memory pages")');
+  await shot('publish-ready');
 
   step('settings / agents');
   await page.click('#btnMore');

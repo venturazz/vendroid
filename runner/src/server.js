@@ -18,6 +18,7 @@ import * as deviceRoutes from './routes/devices.js';
 import * as projectRoutes from './routes/projects.js';
 import * as aiRoutes from './routes/ai.js';
 import * as agentRoutes from './routes/agent.js';
+import * as playRoutes from './routes/play.js';
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const trustProxy = ['1', 'true'].includes(String(process.env.TRUST_PROXY || '').toLowerCase());
@@ -44,7 +45,7 @@ const clientIp = (req) => {
 };
 
 const ctx = { builds, projects, watchdog, agentTools, clientIp };
-for (const mod of [coreRoutes, buildRoutes, deviceRoutes, projectRoutes, aiRoutes, agentRoutes]) mod.register(router, ctx);
+for (const mod of [coreRoutes, buildRoutes, deviceRoutes, projectRoutes, aiRoutes, agentRoutes, playRoutes]) mod.register(router, ctx);
 
 // ---------------------------------------------------------------- static UI
 const serveIndex = (req, res) => {

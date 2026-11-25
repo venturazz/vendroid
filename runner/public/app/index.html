@@ -10,7 +10,7 @@
     <div id="projMenu" class="menu" hidden></div>
   </div>
   <div class="runbar" id="runbar" hidden>
-    <select id="task" title="Build variant"><option>assembleDebug</option><option>assembleRelease</option><option>clean assembleDebug</option></select>
+    <select id="task" title="Build variant"><option>assembleDebug</option><option>assembleRelease</option><option>clean assembleDebug</option><option value="bundleRelease">bundleRelease (.aab for Play)</option></select>
     <button id="btnRun" class="primary" title="Build, install and launch (Ctrl+Enter)">▶ Run</button>
     <button id="btnBuildOnly" title="Build only">⚒ Build</button>
     <button id="btnCancel" class="danger" title="Cancel the running build" disabled>■</button>
@@ -60,6 +60,7 @@
     <button data-view="explorer" class="active" title="Explorer (Ctrl+Shift+E)">🗂</button>
     <button data-view="search" title="Search (Ctrl+Shift+F)">🔍</button>
     <button data-view="git" title="Source Control (Ctrl+Shift+G)">⎇<span id="gitBadge" class="dot" hidden></span></button>
+    <button data-view="publish" title="Publish to Google Play">🚀<span id="playBadge" class="dot warn" hidden></span></button>
     <span class="grow"></span>
     <button id="btnAiToggle" title="AI Assistant (Ctrl+I)">✨</button>
   </nav>
@@ -78,6 +79,12 @@
       <div class="pane-head"><span>SEARCH</span></div>
       <input id="searchInput" placeholder="Search in project" spellcheck="false">
       <div id="searchResults" class="search-results"></div>
+    </section>
+    <section data-pane="publish" class="pane" hidden>
+      <div class="pane-head"><span>PUBLISH · GOOGLE PLAY</span><span class="grow"></span>
+        <button class="icon" id="playRefresh" title="Re-check">⟳</button>
+      </div>
+      <div id="playBody" class="play-body"></div>
     </section>
     <section data-pane="git" class="pane" hidden>
       <div class="pane-head"><span>SOURCE CONTROL</span><span class="grow"></span>

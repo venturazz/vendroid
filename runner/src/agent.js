@@ -7,6 +7,7 @@ import * as ai from './ai.js';
 import * as files from './files.js';
 import * as git from './git.js';
 import * as aicode from './aicode.js';
+import * as play from './play.js';
 import { TASKS, HttpError, bad, isSerial, isTcpTarget, isBuildId, isLevel } from './validate.js';
 
 const TERMINAL = ['succeeded', 'failed', 'cancelled'];
@@ -199,6 +200,17 @@ export function createAgentTools({ projects, builds, watchdog }) {
       },
     },
     {
+      name: 'play_check',
+      description: `Google Play readiness of a project: target API ${play.PLAY_TARGET_SDK}+, unique applicationId, versionCode, upload key, debuggable, R8, sensitive permissions, signed .aab, 16 KB page-size alignment of native libraries.`,
+      inputSchema: obj({ project: S.project }, ['project']),
+      run: ({ project }) => {
+        const p = proj(project);
+        const rel = builds.list(p.id).filter((b) => b.state === 'succeeded' && ['assembleRelease', 'bundleRelease'].includes(b.task) && b.apk)
+          .map((b) => ({ ...b, artifactType: b.artifactType || b.apk.type, apkSize: b.apk.size }));
+        return play.checks(p, rel, (b) => builds.apkPath(builds.get(b.id)));
+      },
+    },
+    {
       name: 'list_devices',
       description: 'Connected Android devices (adb devices -l).',
       inputSchema: obj({}),
@@ -226,6 +238,7 @@ export function createAgentTools({ projects, builds, watchdog }) {
         const s = await device(serial);
         if (action === 'install') {
           const b = buildId ? builds.get(buildId) : builds.latestApk(p.id);
+          if (b?.artifactType === 'aab') throw bad('An .aab cannot be installed with adb');
           const apk = b && builds.apkPath(b);
           if (!apk) throw new HttpError(404, 'No built APK for this project; run start_build first');
           return { ...(await adbm.installApk(s, apk)), buildId: b.id };

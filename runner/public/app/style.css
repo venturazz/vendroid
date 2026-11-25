@@ -233,3 +233,24 @@ dialog.quick li.sel{background:#1f3a5f}
   .resizer.v{display:none}
   .runbar{border-left:0;padding-left:0}
 }
+
+/* ---- publish */
+.dot.warn{background:var(--err)}
+.play-body{flex:1;overflow:auto;padding:0 10px 14px;display:flex;flex-direction:column;gap:10px}
+.play-sum{border:1px solid var(--bd);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px}
+.play-sum.ok{border-color:var(--ok)}.play-sum.bad{border-color:var(--err)}
+.play-sum b{font-size:14px}
+.pcheck{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--bd)}
+.pcheck:last-child{border-bottom:0}
+.pcheck .si{width:18px;flex:none;text-align:center}
+.pcheck .pt{font-weight:600}
+.pcheck .pd{color:var(--mut);font-size:12px;white-space:pre-wrap;word-break:break-word}
+.pcheck .pf{font-size:12px;color:var(--warn);margin-top:2px}
+.pcheck .pa{margin-top:4px;display:flex;gap:6px;flex-wrap:wrap}
+.pcheck .pa button{font-size:12px;padding:2px 8px}
+.pcheck.fail .si{color:var(--err)}.pcheck.warn .si{color:var(--warn)}.pcheck.pass .si{color:var(--ok)}.pcheck.info .si{color:var(--acc)}
+.keycard{border:1px solid var(--bd);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;font-size:12px}
+.keycard h4{margin:0;font-size:13px}
+.keycard input{width:100%}
+.keycard .fp{font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--mut)}
+.keycard .warnbox{background:#2a2110;border:1px solid #5a4410;border-radius:6px;padding:6px 8px;color:#e3b341}

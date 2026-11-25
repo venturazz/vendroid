@@ -41,7 +41,7 @@ export function register(router, { builds, projects }) {
     if (!file) throw new HttpError(404, 'No APK artifact for this build');
     const st = fs.statSync(file);
     res.writeHead(200, {
-      'Content-Type': 'application/vnd.android.package-archive',
+      'Content-Type': file.endsWith('.aab') ? 'application/octet-stream' : 'application/vnd.android.package-archive',
       'Content-Length': st.size,
       'Content-Disposition': `attachment; filename="${(b.projectId || 'app').replace(/[^A-Za-z0-9._-]/g, '_')}-${b.id}-${path.basename(file).replace(/[^A-Za-z0-9._-]/g, '_')}"`,
     });
