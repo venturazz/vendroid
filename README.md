@@ -26,7 +26,7 @@ sudo bash runner/scripts/setup-ubuntu-arm64.sh   # prints the password; then put
 ```
 
 Then open the dashboard and click **New Project** or **Clone from Git**. Details: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
-Full feature list with IDs: **[docs/SPEC.md](docs/SPEC.md)**.
+Full feature list with IDs: **[docs/SPEC.md](docs/SPEC.md)**. Planned work: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 ## Features
 
