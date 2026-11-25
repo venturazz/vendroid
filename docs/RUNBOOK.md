@@ -1,104 +1,166 @@
 # Runbook
 
-## 0. Prerequisites
+1. [Prerequisites](#1-prerequisites)
+2. [Deploy on Coolify / Docker Compose](#2-deploy-on-coolify--docker-compose)
+3. [Deploy as a normal Linux service (systemd)](#3-deploy-as-a-normal-linux-service-systemd)
+4. [Connect the phone over ZeroTier / WireGuard](#4-connect-the-phone-over-zerotier--wireguard)
+5. [Verify builds, 9Router and Hermes](#5-verify-builds-9router-and-hermes)
+6. [Optional: push-to-deploy, release signing, API token](#6-optional-features)
+7. [ARM64 aapt2 details](#7-arm64-aapt2-details)
+8. [Troubleshooting](#8-troubleshooting)
 
-- OCI Ampere A1 VM, Ubuntu 22.04/24.04 `aarch64`, DNS name pointing at it, ports 80/443 open (OCI security list **and** `ufw`/iptables). **Do not open 3080, 20128 or 8644.**
-- 9Router on `127.0.0.1:20128`, Hermes Agent on `127.0.0.1:8644` (already running on the VM).
-- An Android project with a Gradle wrapper (`gradlew`).
+## 1. Prerequisites
 
-## 1. ARM64 `aapt2` strategy
+- OCI Ampere A1 VM with Ubuntu 22.04/24.04 `aarch64` (4 OCPU / 24 GB is plenty) and a DNS name for the dashboard.
+- 80/443 reachable (OCI security list and the VM firewall). **Never open 3080, 20128 or 8644.**
+- 9Router on `127.0.0.1:20128` and Hermes Agent on `127.0.0.1:8644` on the same VM.
+- Your Android project in a Git repository (any AGP 8.x/9.x project with `gradlew`).
 
-Google ships `aapt2` (in `build-tools` and in the Maven artifact AGP downloads) as x86_64 only. The runner
-makes Gradle use a working aarch64 one through `android.aapt2FromMavenOverride`:
+## 2. Deploy on Coolify / Docker Compose
 
-1. `runner/scripts/bootstrap-sdk.sh` finds a working `aapt2` and records its path in `$ANDROID_HOME/.aapt2_path`.
-   Order in `AAPT2_MODE=auto`: `AAPT2_BINARY` if set, then `/usr/bin/aapt2` from the `aapt` apt package (if your Ubuntu release packages it), then a **box64** wrapper around the SDK's x86_64 `aapt2`.
-2. At startup the runner writes `android.aapt2FromMavenOverride=<that path>` plus the memory caps into
-   `$GRADLE_USER_HOME/gradle.properties` (a managed block). User-home properties outrank the project's
-   own `gradle.properties`, so the project repo needs no changes. The same override is also passed as `-P` on every build.
-3. `GET /api/health/env` runs `aapt2 version`. `aapt2.ok:false` means builds will fail at resource linking.
+How it is wired:
 
-Choosing a mode: `AAPT2_MODE=apt` (native, fastest), `box64` (set `BUILD_BOX64=1` for the setup script or
-`INSTALL_BOX64=true` for Docker), or `path` with `AAPT2_BINARY=/path/to/native/aapt2` (e.g. a community
-aarch64 build). The `aapt2` version must be compatible with your Android Gradle Plugin version; if linking
-fails with an unknown-flag error, use a newer aapt2.
-
-`adb` is the distro's native arm64 build (`adb` package). Google's `platform-tools` is not installed.
-
-## 2. Deployment A: normal Linux service (systemd + Caddy/Nginx)
-
-```bash
-git clone <this repo> && cd <repo>
-sudo bash runner/scripts/setup-ubuntu-arm64.sh            # add BUILD_BOX64=1 if you want box64
-sudoedit /etc/android-runner.env                          # package, phone address, AI keys, AUTH_PASSWORD
-sudo -u android-runner git clone <your-android-repo> /srv/android-project
-sudo systemctl restart android-runner && journalctl -u android-runner -f
+```
+Internet ─► Coolify proxy ─► edge (bridge network, :3080) ─► Unix socket ─► runner (host network)
+                                                                              ├─ 127.0.0.1:20128 9Router
+                                                                              ├─ 127.0.0.1:8644  Hermes
+                                                                              └─ zt*/wg0 ─► phone :5555
 ```
 
-The service listens on `127.0.0.1:3080` (`HOST=127.0.0.1` in the env file). Add HTTPS with one of:
+`runner` uses the host network so it reaches the phone through the host's tunnel interface and the loopback-only AI
+services, the same as a systemd install. Coolify cannot route a domain to a host-network container, so the small
+`edge` service relays each connection byte-for-byte into the runner's Unix socket. SSE is never buffered.
 
-- Caddy: put `deploy/proxy/Caddyfile` in `/etc/caddy/Caddyfile` (edit the hostname), `sudo systemctl reload caddy`. `flush_interval -1` is what keeps SSE live.
-- Nginx: `deploy/proxy/nginx.conf` (`proxy_buffering off`, `gzip off`, 1 h read timeout), then `certbot --nginx`.
+**Coolify**
 
-Set `TRUST_PROXY=true` in the env file when the proxy overwrites `X-Forwarded-For`.
-pm2 instead of systemd: `deploy/ecosystem.config.cjs` (keep one instance).
+1. *+ New Resource → Public/Private Repository →* this repo, *Build Pack: Docker Compose*, file `docker-compose.yml`.
+2. *Domains:* set the `edge` service to `https://runner.example.com:3080`. The `:3080` is the container port; visitors
+   use plain `https://runner.example.com`. Leave `runner` without a domain.
+3. *Environment Variables* (everything else has defaults):
+   | Variable | Example |
+   |---|---|
+   | `DEFAULT_PACKAGE_NAME` | `com.example.myapp` |
+   | `DEFAULT_DEVICE_ADDRESS` | `10.147.17.50:5555` |
+   | `PROJECT_GIT_URL` | `https://github.com/you/app.git` (private: `https://<token>@github.com/you/app.git`) |
+   | `AUTH_PASSWORD` | optional. If empty, a password is generated and shown in the `runner` logs |
+   | `NINE_ROUTER_API_KEY`, `NINE_ROUTER_MODEL`, `HERMES_WEBHOOK_SECRET` | your values |
+4. *Deploy.* The dashboard is up within seconds. On first start the runner installs the Android SDK and aarch64 build
+   tools into a volume (about 2 to 4 minutes, visible in the logs). Builds queued meanwhile wait for it.
+5. Sign in. The password is in the `runner` logs (`AUTH_PASSWORD not set. Dashboard password: …`) unless you set one.
 
-## 3. Deployment B: Docker Compose / Coolify
+**Plain Docker Compose** (no Coolify): `cp .env.example .env`, edit, `docker compose up -d --build`. The runner listens
+on `127.0.0.1:3080`. Put the host's Caddy/Nginx in front (section 3, step 4).
 
-```bash
-cp .env.example .env     # set AUTH_PASSWORD, DEFAULT_*, NINE_ROUTER_*, HERMES_*; set PROJECT_GIT_URL to auto-clone
-docker compose up -d --build
-```
+Persistent volumes (kept across redeploys): `android-sdk`, `gradle-home`, `android-keys` (ADB RSA key, so the phone
+stays authorized), `runner-data` (history, logs, APKs, generated password), `project` (checkout).
 
-First start downloads the Android SDK into the `android-sdk` volume (a few minutes); later starts skip it.
-Persisted volumes: `android-sdk`, `gradle-home` (`/root/.gradle`), `android-keys` (`/root/.android`, the ADB RSA keys), `runner-data` (history, logs, APKs, session secret), `project`.
+## 3. Deploy as a normal Linux service (systemd)
 
-**Coolify:** New Resource → Docker Compose (from this repo) → paste/enter the variables from `.env.example` in the Environment tab (`AUTH_PASSWORD` is mandatory; compose fails fast without it) → Deploy.
+1. Install (idempotent; re-run it to upgrade):
+   ```bash
+   git clone https://github.com/venturazz/vendroid && cd vendroid
+   sudo PROJECT_GIT_URL=https://github.com/you/app.git bash runner/scripts/setup-ubuntu-arm64.sh
+   ```
+   It installs JDK 17 + 21, Node 22, adb, the SDK and aarch64 tools. It also creates the `android-runner` user and
+   `/etc/android-runner.env`, starts the service, and prints the password.
+2. Edit `/etc/android-runner.env` (`DEFAULT_PACKAGE_NAME`, `DEFAULT_DEVICE_ADDRESS`, AI keys), then
+   `sudo systemctl restart android-runner`.
+3. Logs: `journalctl -u android-runner -f`.
+4. HTTPS:
+   - **Caddy**: copy `deploy/proxy/Caddyfile` to `/etc/caddy/Caddyfile`, set the hostname, `sudo systemctl reload caddy`.
+     `flush_interval -1` keeps SSE live.
+   - **Nginx**: `deploy/proxy/nginx.conf` (`proxy_buffering off`, `gzip off`, 1 h timeouts) and `certbot --nginx -d …`.
+5. pm2 instead of systemd: `deploy/ecosystem.config.cjs`. Keep a single instance, because the build lock is in-process.
 
-### Networking: `network_mode: host` vs bridge
+## 4. Connect the phone over ZeroTier / WireGuard
 
-| | host (default) | bridge (`docker-compose.bridge.yml`) |
-|---|---|---|
-| 9Router / Hermes on host `127.0.0.1` | reachable | **not reachable**; they must also listen on the docker gateway IP (e.g. `172.17.0.1`), still not public |
-| ADB to phone's tunnel IP | direct via the host's ZeroTier/WireGuard interface | works through host NAT/routing (outbound only) |
-| Coolify domain/Traefik routing | Traefik cannot route by label to a host-network container; either proxy with the host Caddy/Nginx to `127.0.0.1:3080` (set `RUNNER_BIND_HOST=127.0.0.1`), or bind `0.0.0.0` and block 3080 in the firewall | works with Coolify's domain feature |
+SSH is for administering the VM. ADB only travels inside the tunnel.
 
-Host mode is the default because it keeps both AI services loopback-only without changes. If you want Coolify's built-in HTTPS routing, use host mode with the host reverse proxy above, or switch to bridge mode and accept the extra listener on the docker gateway. I could not exercise Coolify itself from the build sandbox, so check this part on your server.
+1. **Tunnel**
+   - ZeroTier: on the VM run `curl -s https://install.zerotier.com | sudo bash && sudo zerotier-cli join <network-id>`.
+     Install the ZeroTier app on the phone, join the same network, authorize both in ZeroTier Central, and note the
+     phone's managed IP.
+   - WireGuard: give the phone a peer with a fixed tunnel IP and `PersistentKeepalive = 25`.
+   - On the phone, exclude the VPN app from battery optimization so the tunnel survives screen-off.
+2. **ADB over TCP** (one of):
+   - Android 11+ *Wireless debugging*: pair once from the VM
+     (`adb pair <phone_ip>:<pairing_port>`, or `docker compose exec runner adb pair …`) with the code shown on the phone,
+     then use the **IP address & port** shown on the Wireless debugging screen. That port changes when wireless
+     debugging is toggled or the phone reboots; update `DEFAULT_DEVICE_ADDRESS` or type it into the top bar.
+   - USB once: `adb tcpip 5555` gives a fixed port, which resets on phone reboot.
+3. **Check reachability from the VM**: `nc -vz <phone_ip> 5555`.
+4. **Connect**: set `DEFAULT_DEVICE_ADDRESS` (the runner connects and keeps reconnecting on its own) or type
+   `<phone_ip>:5555` in the top bar and click **Connect**. On the phone accept **Allow USB debugging?** and tick
+   **Always allow from this computer**. The key lives in the persisted `~/.android`.
+5. The device badge turns green. `unauthorized` means the phone prompt hasn't been accepted. `offline` means click
+   **Reconnect**; if that doesn't help, **Restart ADB**. Manually disconnecting pauses auto-reconnect until you connect again.
 
-## 4. Connecting the phone over ZeroTier / WireGuard
+## 5. Verify builds, 9Router and Hermes
 
-SSH is for administering the VM. ADB reaches the phone only through the tunnel.
+In the dashboard:
+1. Click **env** in the top bar: every row should be green (aarch64, Java, SDK, adb, aapt2, project).
+2. **Build & Deploy** (`Ctrl+Enter`) with Auto-Install and Auto-Launch on. Lines must stream live. If they arrive in one burst
+   at the end, a proxy is buffering (see section 3, step 4). The app launches and the Logcat tab opens filtered to it.
+3. Break the code (an unresolved reference), build again, then **Analyze Error (9Router)**. A 502 message names the
+   problem (`unreachable`, HTTP status, or an empty completion), usually the URL, key or model.
+4. **Investigate (Hermes)**: Hermes receives `POST $HERMES_WEBHOOK_URL` with header `X-Webhook-Secret` and body
+   `{event, jobId, projectPath, packageName, deviceSerial, errorTail, crashSnippet, timestamp}`.
 
-1. **Tunnel:** install ZeroTier (`curl -s https://install.zerotier.com | sudo bash; sudo zerotier-cli join <network-id>`) on the VM and in the phone's ZeroTier app, authorize both in ZeroTier Central, and note the phone's managed IP (e.g. `10.147.17.50`). For WireGuard, use a `wg0` peer for the phone with a fixed tunnel IP and `PersistentKeepalive = 25`. Do not use a phone that sleeps its VPN aggressively: disable battery optimization for the VPN app.
-2. **Enable ADB over TCP** (one of):
-   - Plug in once by USB: `adb tcpip 5555` (resets on phone reboot).
-   - Android 11+ Wireless debugging: pair once from the VM with `adb pair <ip>:<pair_port>` (code from the phone), then use the **connect port shown on the Wireless debugging screen** (it changes after toggling/rebooting; update `DEFAULT_DEVICE_ADDRESS`).
-3. **Reachability check from the VM (or `docker exec`):** `nc -vz <phone_tunnel_ip> 5555`.
-4. In the dashboard type `<phone_tunnel_ip>:5555` → **Connect**. Accept **Allow USB debugging → Always allow** on the phone. The key is stored in `~/.android` (`/root/.android` in Docker, `/var/lib/android-runner/.android` under systemd), which is why that path is persisted.
-5. If the device shows `offline` or `unauthorized`: **Reconnect**, then **Restart ADB**.
-
-## 5. Verify end to end
-
+From a shell (works for automation too):
 ```bash
 H=https://runner.example.com
 curl -c jar -H 'Content-Type: application/json' -d '{"password":"…"}' $H/api/auth/login
-curl -b jar $H/api/health/env | jq '.ok,.checks,.aapt2'            # all true; aarch64 true
-curl -b jar $H/api/ai/status                                        # both reachable
-curl -b jar -H 'Content-Type: application/json' -d '{"target":"10.147.17.50:5555"}' $H/api/devices/connect
-curl -b jar $H/api/devices
-curl -N -b jar -H 'Content-Type: application/json' -X POST \
-  -d '{"task":"assembleDebug","autoInstallAfterBuild":true,"autoLaunchAfterInstall":true}' $H/api/builds   # note the id
-curl -N -b jar $H/api/builds/<id>/stream                            # lines must arrive live, not in one burst
+curl -b jar $H/api/health/env | jq '.ok, .checks'
+curl -b jar -H 'Content-Type: application/json' -d '{"task":"assembleDebug","autoInstallAfterBuild":true,"autoLaunchAfterInstall":true}' $H/api/builds
+curl -N -b jar $H/api/builds/<id>/stream
+curl -b jar $H/api/ai/status
 ```
 
-- **SSE through the proxy:** if the build log appears all at once, the proxy is buffering (see the Caddy/Nginx snippets).
-- **9Router:** break the build (e.g. an unresolved reference), click **Analyze Error (9Router)**, or `POST /api/ai/analyze {"mode":"build_error","jobId":"<id>"}`. A `502` with "9Router unreachable/returned …" means a wrong `NINE_ROUTER_URL`, key or model.
-- **Hermes:** `POST /api/ai/hermes-investigate {"jobId":"<id>"}` or tick **Auto-Notify Hermes** on a failing build. The webhook receives `X-Webhook-Secret: $HERMES_WEBHOOK_SECRET` and the JSON `{event, jobId, projectPath, packageName, deviceSerial, errorTail, crashSnippet, timestamp}`.
-- **Concurrency:** queue two builds; the second stays `queued` until the first finishes. **Cancel** kills the whole Gradle process group.
+## 6. Optional features
 
-## 6. Operations
+**Push-to-deploy.** Set `GIT_WEBHOOK_SECRET` (and `AUTO_BUILD_BRANCH=main` to limit branches). In GitHub, open
+*Settings → Webhooks → Add*, set the payload URL to `https://runner.example.com/api/hooks/git`, content type `application/json`,
+and the same secret, with *Just the push event*. GitLab uses the *Secret token* field; Gitea/Forgejo work the same way as GitHub. Each push runs `git pull`, builds
+`AUTO_BUILD_TASK`, and installs and launches on the default device. Pushes that arrive while a webhook build is already
+queued are merged into it.
 
-- Memory: Gradle JVM `-Xmx4096m -XX:+UseG1GC`, Kotlin daemon `-Xmx3072m`, `--no-daemon`, max 3 workers; override with `GRADLE_JVM_ARGS`, `KOTLIN_DAEMON_JVM_ARGS`, `GRADLE_MAX_WORKERS`.
-- Release builds are unsigned unless your project configures signing; install of an unsigned APK fails by design.
-- Upgrade: systemd → re-run the setup script, `systemctl restart android-runner`. Docker → `docker compose up -d --build`. State survives in volumes / `/var/lib/android-runner`.
-- A runner restart during a build marks that build `failed` (“Interrupted by runner restart”).
+**Signed release builds.** Put the keystore where the runner can read it (Docker: e.g. `/data/release.jks` via
+`docker compose cp release.jks runner:/data/`; systemd: `/var/lib/android-runner/release.jks`, owned by `android-runner`) and
+set `RELEASE_KEYSTORE_PATH`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS` and, if different, `RELEASE_KEY_PASSWORD`.
+The runner uses AGP's injected-signing properties, the mechanism Android Studio uses, so the project needs no
+`signingConfig`. Without them `assembleRelease` produces an unsigned APK and auto-install is skipped.
+
+**Scripts / CI.** Set `API_TOKEN` (16+ characters) and call any endpoint with `Authorization: Bearer $API_TOKEN`.
+
+## 7. ARM64 aapt2 details
+
+`bootstrap-sdk.sh` picks the first working option for `AAPT2_MODE=auto`:
+
+| Mode | What it does | When to use |
+|---|---|---|
+| `path` | uses `AAPT2_BINARY` | you have your own aarch64 aapt2 |
+| `prebuilt` (default) | downloads static aarch64 AOSP build-tools 35.0.2 (SHA-256 pinned), swaps `aapt2`, `aapt`, `aidl`, `zipalign`, … into every installed `build-tools/*` (originals kept as `*.x86_64`) | normal case |
+| `apt` | `/usr/bin/aapt2` from a distro package, if present | offline hosts |
+| `box64` | runs Google's own x86_64 `aapt2` under box64 (build the image with `INSTALL_BOX64=true`, or run setup with `BUILD_BOX64=1`) | a newer AGP needs an aapt2 feature the prebuilt lacks |
+
+The chosen path is stored in `$ANDROID_HOME/.aapt2_path`. The runner writes it as `android.aapt2FromMavenOverride`
+into `$GRADLE_USER_HOME/gradle.properties`, which outranks the project's own file, and also passes it as `-P`.
+`GET /api/health/env` runs `aapt2 version` so you can confirm it works. CI exercises `prebuilt` with a pinned AGP 8 stack
+and with the latest AGP every week, so a breaking AGP release shows up there first.
+
+## 8. Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Log arrives all at once | Proxy buffering. Caddy `flush_interval -1`, Nginx `proxy_buffering off; gzip off`. |
+| `AAPT2 … Daemon startup failed` / `Syntax error: "(" unexpected` | x86_64 aapt2 is being used: check **env → aapt2**, then re-run bootstrap (`docker compose restart runner` or the setup script). |
+| `SDK location not found` / missing platform | Add it to `SDK_PACKAGES` (e.g. `platforms;android-36`) and restart. Licenses are pre-accepted, so AGP can also download it. |
+| `Unsupported class file major version` | The project needs another JDK: Docker `JAVA_VERSION=21`, systemd `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-arm64`. |
+| `git pull` fails | Private repo: put a read-only token in the remote URL (`git -C <project> remote set-url origin https://<token>@github.com/…`). |
+| Device `unauthorized` | Accept the prompt on the phone. If it never appears, revoke USB debugging authorizations on the phone and reconnect. |
+| Device keeps going `offline` | Tunnel sleeps: exclude the VPN app from battery optimization; for WireGuard set `PersistentKeepalive = 25`. |
+| Forgot the generated password | Docker: `docker compose exec runner cat /data/initial_password`; systemd: `sudo grep AUTH_PASSWORD /etc/android-runner.env`. |
+| Out of memory | Lower `GRADLE_JVM_ARGS` / `GRADLE_MAX_WORKERS`. Defaults use about 8 GB at peak. |
+
+A runner restart during a build marks that build `failed` (“Interrupted by runner restart”). History, APKs and logs
+are kept for the last `MAX_BUILD_HISTORY` (30) builds.

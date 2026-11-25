@@ -50,7 +50,8 @@ jobs:
       RELEASE_KEYSTORE_PATH: /keys/ci.jks
       RELEASE_KEYSTORE_PASSWORD: ci-store-pass
       RELEASE_KEY_ALIAS: ci
-      SDK_PACKAGES: ${{ matrix.stack == 'agp8' && 'platforms;android-35 build-tools;35.0.0' || 'platforms;android-36 build-tools;36.0.0' }}
+      # latest: only build-tools; AGP downloads the compileSdk platform itself (licenses are pre-accepted)
+      SDK_PACKAGES: ${{ matrix.stack == 'agp8' && 'platforms;android-35 build-tools;35.0.0' || 'build-tools;36.0.0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

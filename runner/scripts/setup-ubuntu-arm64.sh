@@ -14,6 +14,8 @@ ENV_FILE=/etc/android-runner.env
 PROJECT_DIR=/srv/android-project
 SVC_USER=android-runner
 log() { echo -e "\033[1;32m==>\033[0m $*"; }
+# Commands below run as the service user, which usually cannot read the caller's working directory.
+cd /
 
 log "installing packages"
 export DEBIAN_FRONTEND=noninteractive

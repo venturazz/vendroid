@@ -20,10 +20,17 @@ case "$STACK" in
     GRADLE="$(curl -fsSL https://services.gradle.org/versions/current | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))')"
     BOM="$(curl -fsSL --retry 3 $G/androidx/compose/compose-bom/maven-metadata.xml | grep -oE '<version>[0-9]{4}\.[0-9]{2}\.[0-9]{2}</version>' | sed -E 's#</?version>##g' | sort -V | tail -n1)"
     ACTIVITY="$(latest_maven $G/androidx/activity/activity-compose/maven-metadata.xml)"
-    SDK="${LATEST_COMPILE_SDK:-36}" ;;
+    # Current androidx (Compose 1.13+, core 1.19+) requires compileSdk >= 37.1
+    SDK="${LATEST_COMPILE_SDK:-37.2}" ;;
   *) echo "unknown stack $STACK"; exit 2 ;;
 esac
 AGP_MAJOR="${AGP%%.*}"
+SDK_MAJOR="${SDK%%.*}"
+if [ "$SDK" != "$SDK_MAJOR" ]; then # minor API level, e.g. 37.2 (AGP 8.13+ DSL)
+  COMPILE_SDK="compileSdk { version = release($SDK_MAJOR) { minorApiLevel = ${SDK#*.} } }"
+else
+  COMPILE_SDK="compileSdk = $SDK"
+fi
 echo "stack=$STACK agp=$AGP kotlin=$KOTLIN gradle=$GRADLE compose-bom=$BOM activity=$ACTIVITY compileSdk=$SDK"
 
 mkdir -p "$DIR/app/src/main/java/dev/runner/sample" "$DIR/app/src/main/res/values" "$DIR/app/src/main/res/drawable"
@@ -72,11 +79,11 @@ $KOTLIN_APP
 
 android {
     namespace = "dev.runner.sample"
-    compileSdk = $SDK
+    $COMPILE_SDK
     defaultConfig {
         applicationId = "dev.runner.sample"
         minSdk = 24
-        targetSdk = $SDK
+        targetSdk = $SDK_MAJOR
         versionCode = 1
         versionName = "1.0"
     }
