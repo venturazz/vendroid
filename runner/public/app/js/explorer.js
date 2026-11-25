@@ -176,6 +176,12 @@ on('git-status', (st) => {
   }
 });
 on('fs-changed', () => refreshTree());
+// Follow the active editor tab in the tree (like "Autoreveal" in IDEs).
+on('active-file', (p) => {
+  if (!p || selected === p) return;
+  if (document.querySelector(`#tree .node[data-path="${CSS.escape(p)}"]`)) { select(p); return; }
+  reveal(p).catch(() => {});
+});
 
 // ---- search
 let searchTimer;

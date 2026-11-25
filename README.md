@@ -1,126 +1,120 @@
-# Android Remote Runner
+# Vendroid
 
-Self-hosted web app for an **OCI Ampere ARM64 (aarch64) Ubuntu VM**. It builds Kotlin / Jetpack Compose
-apps with Gradle, installs them on a **physical phone over ADB through a ZeroTier/WireGuard tunnel**,
-streams build logs and filtered `logcat` live, and sends failures to **9Router** (instant analysis)
-and **Hermes Agent** (deep investigation).
+A self-hosted **browser IDE for Android apps**, running on an **OCI Ampere ARM64 (aarch64) Ubuntu VM**.
+You create or clone Kotlin projects, edit them in the browser with an AI assistant that writes real code,
+build them with Gradle on the server, and run them on **your physical phone over a ZeroTier/WireGuard tunnel**.
+The live build log, filtered logcat and phone screenshots appear in the same window. **Hermes Agent** can
+do all of this too, through an MCP (or REST) endpoint.
 
 [![CI](https://github.com/venturazz/vendroid/actions/workflows/ci.yml/badge.svg)](https://github.com/venturazz/vendroid/actions/workflows/ci.yml)
-CI builds a real Compose app on GitHub's arm64 runners, both in Docker and through the systemd installer,
-against a pinned AGP 8 stack and the latest AGP/Gradle/Kotlin (rechecked weekly).
+CI builds real apps on GitHub's arm64 runners in both deployment modes: both project templates, a pinned AGP 8
+stack and the latest AGP/Gradle/Kotlin (rechecked weekly). It also drives the IDE in a real browser.
 
-**Stack:** Node.js 20+ using only the standard library (no npm dependencies), vanilla HTML/CSS/JS
-dashboard served by the same process. One codebase, two deployment modes; only environment variables differ.
+**Stack:** Node.js 20+ using only the standard library (no runtime npm dependencies). The UI is plain ES modules
+plus a vendored CodeMirror 6 bundle (`editor/` builds it). One codebase, two deployment modes (systemd or Coolify/Docker Compose).
 
 ## Quick start
 
-**Coolify / Docker Compose**: deploy this repo with the Docker Compose build pack, give the `edge`
-service a domain (`https://runner.example.com:3080`), set `DEFAULT_PACKAGE_NAME`,
-`DEFAULT_DEVICE_ADDRESS` and `PROJECT_GIT_URL`, and deploy. The dashboard password is printed in the
-`runner` logs on first start (or set `AUTH_PASSWORD`).
+**Coolify / Docker Compose:** deploy this repo with the Docker Compose build pack and give the `edge` service a
+domain (`https://ide.example.com:3080`). Optionally set `DEFAULT_DEVICE_ADDRESS`, `GIT_TOKEN` and the 9Router/Hermes
+keys. The password is printed in the `runner` logs on first start.
 
-**Plain Ubuntu (systemd)**:
+**Plain Ubuntu (systemd):**
 ```bash
 git clone https://github.com/venturazz/vendroid && cd vendroid
-sudo PROJECT_GIT_URL=https://github.com/you/your-app.git bash runner/scripts/setup-ubuntu-arm64.sh
+sudo bash runner/scripts/setup-ubuntu-arm64.sh   # prints the password; then put Caddy/Nginx in front (deploy/proxy/)
 ```
-It prints the password at the end. Put Caddy or Nginx in front (`deploy/proxy/`).
 
-Full instructions, phone pairing and troubleshooting: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
+Then open the dashboard and click **New Project** or **Clone from Git**. Details: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
+Full feature list with IDs: **[docs/SPEC.md](docs/SPEC.md)**.
 
-## What you get
+## Features
 
-- **Build & Deploy in one click** (or `Ctrl+Enter`): optional `git pull`, Gradle build, install, launch, and the
-  Logcat tab opens filtered to your app. One build runs at a time and the rest queue. Cancel kills the whole Gradle process group.
-- **Push-to-deploy**: a GitHub/Gitea/GitLab webhook builds and installs every push (optional, `GIT_WEBHOOK_SECRET`).
-- **Phone stays connected**: the runner re-runs `adb connect` on `DEFAULT_DEVICE_ADDRESS` whenever the tunnel or
-  phone drops (with back-off), and the ADB key persists so the phone stays authorized after redeploys.
-- **Logcat**: level/tag/keyword/package filters, pause/resume, export, automatic crash detection with a browser
-  notification, **Triage Crash (9Router)** and **Investigate (Hermes)**.
-- **Build console**: live log with replay after refresh, timer, commit info, log download,
-  **Analyze Error (9Router)**, **Investigate (Hermes)**, and optional auto-notify Hermes on failure.
-- **Device screen**: screenshot with auto-refresh and save, Install latest / any APK from history, Launch, Force stop, Clear data.
-- **Signed release builds** without touching the project: set `RELEASE_KEYSTORE_*`.
-- Desktop notifications when a build finishes. The dashboard remembers your toggles and filters.
-- First boot needs no configuration: the password is generated, the SDK and aarch64 build tools install in the
-  background, and queued builds wait for them.
+**Project Hub**
+- One card per project: package, UI toolkit, version, last build, APK download.
+- **New Project** from a verified template: Jetpack Compose (Material 3) or XML Views (AppCompat, Material, ViewBinding,
+  ConstraintLayout). You choose the name, package and minSdk. The project gets a git repository with a first commit.
+- **Clone from Git** over HTTPS. Private repos work with `GIT_TOKEN`. Any folder in `WORKSPACES_DIR` is picked up automatically.
 
-## ARM64 toolchain
+**Editor**
+- File Explorer: lazy tree, git colors, new/rename/delete, right-click → "Add to AI context".
+- Multi-tab CodeMirror editor with Kotlin, Java, XML, Gradle (Kotlin and Groovy DSL), JSON, properties, YAML, TOML and
+  Markdown highlighting. Includes search/replace, bracket matching, folding and autocomplete.
+- `Ctrl+P` quick open, `Ctrl+Shift+F` project search.
+- Saves are conflict-safe: if the AI, git or Hermes changed a file while it was open, you're asked before it's overwritten.
 
-Google ships `aapt2`, `aidl` and `zipalign` for x86_64 only. The runner points AGP at Google's own `aapt2`, run under
-box64 (installed by the image and the setup script), through `android.aapt2FromMavenOverride` in a managed block of
-`$GRADLE_USER_HOME/gradle.properties`. The other build tools are swapped for native aarch64 builds. Your project needs no
-changes, and every APK is checked for a manifest and resource table before it can reach the phone. Details and
-alternatives: runbook §7. Gradle is capped at `-Xmx4096m -XX:+UseG1GC`, the Kotlin daemon at `-Xmx3072m`, with 3 workers.
+**Source Control**
+- Status with per-file diff, commit (all or selected), pull (fast-forward), push (sets upstream).
+- Branch switch/create, discard changes, recent commits.
+
+**AI assistant (9Router)**
+- A chat panel that sees the project structure, the open file, a selection, files you add, and optionally the last build error.
+- Answers stream in. Proposed changes appear as **diffs** with **Apply**, **Apply all** and **▶ Apply & Run**, plus **Undo**.
+- **Fix with AI** from a failed build or a logcat crash.
+- **Send to Hermes** hands bigger tasks to Hermes Agent.
+
+**Run on the phone**
+- **▶ Run** (`Ctrl+Enter`) saves, builds, installs, launches, and opens logcat filtered to the app.
+- One build runs at a time across all projects; the rest queue.
+
+**Bottom panel (per project)**
+- Build Output: live log, history, compiler errors clickable to the file and line, Analyze Error (9Router), Fix with AI, Investigate (Hermes).
+- Logcat: level/tag/keyword/"this app" filters, crash detection.
+- Device: on-demand screenshot and app actions.
+
+**Agents**
+- `POST /mcp` (MCP Streamable HTTP) and `/api/agent/tools/*` (REST) with a bearer token.
+- 23 tools: projects, files, search, edits (with undo), git, builds (blocking wait), devices, install/launch/stop/clear,
+  screenshot (image), logcat, 9Router analysis.
+
+**Kept from v1:** the ARM64 toolchain (box64 + Google's aapt2, native aarch64 build tools), resource caps, ADB tunnel
+auto-reconnect, push-to-deploy webhooks (now matched to the right project), signed release builds, password auth,
+Coolify edge relay, persistent volumes.
 
 ## Layout
 
 ```
 .
-├── .env.example               # every setting, shared by systemd and Docker/Coolify
-├── docker-compose.yml         # runner (host network) + edge (bridge, Coolify-routable)
-├── deploy/
-│   ├── systemd/android-runner.service
-│   ├── ecosystem.config.cjs   # pm2 alternative
-│   └── proxy/{Caddyfile,nginx.conf}
-├── docs/RUNBOOK.md
-├── .github/{workflows/ci.yml,ci/}   # arm64 end-to-end CI
+├── .env.example                 # every setting (systemd and Docker/Coolify)
+├── docker-compose.yml           # runner (host network) + edge (bridge, Coolify-routable)
+├── deploy/{systemd,proxy}/      # unit file, Caddy/Nginx (SSE-safe)
+├── docs/{RUNBOOK,SPEC}.md
+├── editor/                      # builds runner/public/vendor/codemirror.bundle.js (dev only)
+├── .github/{workflows,ci}/      # arm64 end-to-end CI, tooling (bundle + versions)
 └── runner/
     ├── Dockerfile.arm64
-    ├── scripts/{setup-ubuntu-arm64.sh,bootstrap-sdk.sh,docker-entrypoint.sh}
+    ├── scripts/                 # setup-ubuntu-arm64.sh, bootstrap-sdk.sh, docker-entrypoint.sh, git-askpass.sh
+    ├── templates/               # compose/, views/, common/, wrapper/ (Gradle 9.9.2), versions.json
     ├── src/
-    │   ├── server.js     routes, auth gate, static UI, TCP + Unix-socket listeners
-    │   ├── builds.js     single-worker queue, state machine, ring buffer, persistence, signing
-    │   ├── adb.js        devices, actions, screenshot, filtered logcat
-    │   ├── watchdog.js   tunnel ADB auto-reconnect
-    │   ├── ai.js         9Router + Hermes + log slicing
-    │   ├── webhook.js    git push webhook verification
-    │   ├── edge.js       TCP -> Unix socket relay for Coolify
-    │   └── auth.js config.js validate.js exec.js http.js sse.js health.js gradleProps.js
-    ├── public/           login page + dashboard
-    └── test/             node:test unit + integration suite (npm test)
+    │   ├── server.js            # bootstrap, auth gate, static files, listeners
+    │   ├── routes/              # core, builds, devices, projects (files+git), ai, agent (MCP/REST)
+    │   ├── projects.js files.js git.js           # Project Hub, safe file access, git
+    │   ├── aicode.js diff.js                     # AI edits: context, streaming, SEARCH/REPLACE, apply/undo
+    │   ├── agent.js mcp.js                       # agent tools + MCP JSON-RPC
+    │   ├── builds.js adb.js watchdog.js          # queue, ADB, auto-reconnect
+    │   └── ai.js webhook.js auth.js config.js validate.js exec.js http.js sse.js health.js gradleProps.js apkcheck.js edge.js
+    ├── public/                  # login + IDE (app/index.html, app/js/*.js, app/style.css, vendor/)
+    └── test/                    # unit, integration (v1 API), ide (v2), ui/smoke.mjs (browser, CI)
 ```
-
-## API
-
-Every route requires the session cookie or `Authorization: Bearer $API_TOKEN`, except `/healthz`,
-`/api/auth/*` and the webhook, which checks its signature.
-
-| Method & path | Purpose |
-|---|---|
-| `POST /api/auth/login` `{password}` · `POST /api/auth/logout` | session cookie (HttpOnly, SameSite=Strict, Secure behind HTTPS) |
-| `GET /api/health/env` | aarch64, Java, `$ANDROID_HOME`, adb, aapt2, SDK bootstrap, disk, RAM |
-| `GET /api/config` · `GET /api/ai/status` | defaults and feature flags · 9Router / Hermes reachability |
-| `POST /api/builds` `{task, gitPullBeforeBuild, autoInstallAfterBuild, autoLaunchAfterInstall, autoNotifyHermes, deviceSerial?, packageName?}` | enqueue `assembleDebug`, `assembleRelease` or `clean assembleDebug` |
-| `GET /api/builds` · `GET /api/builds/:id` · `POST /api/builds/:id/cancel` | history · one build · cancel |
-| `GET /api/builds/:id/stream` | SSE `line` / `state` / `end`, replays the ring buffer, honors `Last-Event-ID` |
-| `GET /api/builds/:id/apk` · `GET /api/builds/:id/log` | artifact and full log download |
-| `GET /api/devices` | parsed `adb devices -l` + auto-reconnect status |
-| `POST /api/devices/connect` / `disconnect` `{target:"ip:port"}` | tunnel ADB |
-| `POST /api/devices/action` `{serial, action: install\|launch\|stop\|clear, packageName?, buildId?}` | allowlisted actions |
-| `GET /api/devices/screenshot?serial=` | PNG from `exec-out screencap -p` |
-| `POST /api/adb/restart` `{mode: reconnect\|restart-server, serial?}` | ADB helper |
-| `GET /api/logcat/stream?serial=&level=&tag=&q=&package=` · `POST /api/logcat/clear` | SSE `lines` batches · `logcat -c` |
-| `POST /api/ai/analyze` `{mode: build_error\|logcat_crash, jobId? \| text?}` | 9Router root cause / affected / fix steps |
-| `POST /api/ai/hermes-investigate` `{jobId?, errorTail?, crashSnippet?, packageName?, deviceSerial?}` | Hermes webhook |
-| `POST /api/hooks/git` | push-to-deploy (GitHub/Gitea `X-Hub-Signature-256`, GitLab `X-Gitlab-Token`) |
 
 ## Security model
 
-- Every subprocess is `spawn(cmd, argv[], {shell:false})`. Tasks, serials, `<ip>:<port>`, package names, levels and
-  build ids are checked against strict allowlists/regexes first. Logcat tag/keyword filters run in JavaScript and never
-  reach a process. AI output is displayed, never executed.
-- Gradle and adb run without the runner's secrets in their environment. Release-signing passwords are written into the
-  0600 `gradle.properties` only for the duration of a release build.
-- Password login with constant-time comparison and 10 failures / 15 min per IP, HMAC-signed expiring cookie, `Origin`
-  check on state-changing requests, a strict CSP (no inline script or style), and `X-Frame-Options: DENY`.
-- 9Router, Hermes and the runner's own TCP port stay on `127.0.0.1`. Only the reverse proxy / Coolify edge is public.
+- Every subprocess is `spawn(cmd, argv[], {shell:false})`. Tasks, devices, packages, branches, clone URLs (`https://`
+  only), project ids and file paths are validated first.
+- File access is confined to the project: no `..`, no `.git/`, and symlinks can't escape it. Git runs with hooks
+  disabled, only the `https` transport allowed (no `ext::`), and tokens passed through `GIT_ASKPASS`.
+- The AI and agents can only propose or apply **file edits** and call the fixed tools. Model output is never executed.
+  Build tooling, `.git`, keystores and the Gradle wrapper jar are off-limits to AI edits.
+- Login: one password, with constant-time comparison and throttling, an HMAC-signed session cookie and an `Origin` check.
+- Agents: a separate bearer token (MCP requires it; a session cookie isn't enough).
+- Gradle and adb never see the runner's secrets. 9Router, Hermes and the runner's TCP port stay on `127.0.0.1`.
 
-Anyone who can sign in can run the configured project's Gradle build, which is code execution on the VM. Use a
-strong password, and keep unrelated secrets out of the runner user's reach.
+Anyone who can sign in, and any agent holding the token, can change code and run Gradle builds, which means running
+code on the VM. Treat the password and token like SSH keys.
 
 ## Development
 
 ```bash
-cd runner && npm test        # 22 unit + integration tests, fake adb/gradlew/9Router/Hermes, ~5 s
+cd runner && npm test     # 36 unit + integration tests (fake adb/gradlew/9Router/Hermes), ~10 s
 ```
+The browser test (`test/ui/smoke.mjs`) and the real ARM64 builds run in CI.

@@ -1,3 +1,4 @@
+[hidden]{display:none!important}
 :root{
   --bg:#0d1117;--bg1:#111821;--bg2:#161b22;--bg3:#1f2630;--bd:#2a313c;--fg:#e6edf3;--mut:#8b949e;
   --ok:#3fb950;--warn:#d29922;--err:#f85149;--acc:#2f81f7;--acc2:#a371f7;
@@ -46,6 +47,7 @@ a.btn:hover{background:#2b3340}
 .runbar{padding-left:8px;border-left:1px solid var(--bd)}
 .menu{position:absolute;top:calc(100% + 4px);left:0;min-width:220px;background:var(--bg2);border:1px solid var(--bd);border-radius:7px;padding:5px;display:flex;flex-direction:column;gap:2px;box-shadow:0 10px 30px #0008;z-index:50}
 .menu.right{left:auto;right:0}
+.menu[hidden]{display:none}
 .menu button{background:transparent;border:0;text-align:left;padding:6px 9px;border-radius:5px}
 .menu button:hover{background:var(--bg3)}
 .menu .chk{padding:5px 8px}
