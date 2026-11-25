@@ -28,7 +28,9 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-ReadWritePaths=/var/lib/android-runner /opt/android-sdk /srv/android-project
+ReadWritePaths=/var/lib/android-runner /opt/android-sdk
+# v1 single-project path (optional; "-" = ignore if missing)
+ReadWritePaths=-/srv/android-project
 
 [Install]
 WantedBy=multi-user.target
