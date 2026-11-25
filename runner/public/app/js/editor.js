@@ -208,8 +208,11 @@ export function renameTab(from, to) {
 /** Re-read open files changed on disk (AI apply, git pull, Hermes). Dirty tabs are left alone. */
 export async function reloadFromDisk(paths) {
   for (const t of tabs.filter((x) => x.kind === 'file' && x.editor && (!paths || paths.includes(x.path)))) {
+    // Only the newest reload of a tab may apply: an older, slower response must not overwrite newer content.
+    const gen = (t.reloadGen = (t.reloadGen || 0) + 1);
     let f;
-    try { f = await pApi(`/file?path=${encodeURIComponent(t.path)}`); } catch { close(t, { force: true }); continue; }
+    try { f = await pApi(`/file?path=${encodeURIComponent(t.path)}`); } catch { if (gen === t.reloadGen) close(t, { force: true }); continue; }
+    if (gen !== t.reloadGen || !tabs.includes(t)) continue;
     if (f.content === undefined) continue;
     const current = t.editor.getValue();
     if (current === f.content) { t.hash = f.hash; t.saved = f.content; t.dirty = false; continue; }

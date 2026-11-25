@@ -169,12 +169,17 @@ try {
   await page.click('.proposal button:has-text("Apply all")');
   await page.waitForFunction(() => [...document.querySelectorAll('.ed:not([hidden]) .cm-content')].some((e) => e.textContent.includes('You tapped')), null, { timeout: 5000 });
 
+  await page.waitForTimeout(1500); // let any late reloads land
+  if (!(await page.textContent('.ed:not([hidden]) .cm-content')).includes('You tapped')) problems.push('editor reverted to stale content after re-apply');
+  if (await page.$('.tab.dirty')) problems.push('a tab is dirty after apply');
+
   step('run: build, install, launch, logcat follows');
   await page.click('#quickConnect');
   await page.waitForSelector('#devBadge.ok', { timeout: 15000 });
   await page.click('#btnRun');
   await page.waitForSelector('[data-bpane=logcat]:not([hidden]) #lcLog div', { timeout: 40000 });
   await shot('run-logcat');
+  if (!(await page.textContent('.ed:not([hidden]) .cm-content')).includes('You tapped')) problems.push('editor content changed during run');
   await page.click('.bottom-tabs [data-btab=build]');
   await page.waitForSelector('#bState.succeeded');
   await page.waitForSelector('#bLog div:has-text("Events injected")');
