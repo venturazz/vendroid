@@ -165,22 +165,30 @@ document.addEventListener('click', (e) => {
 });
 
 // ---------------------------------------------------------------- keyboard
+// Capture phase: IDE shortcuts win over the editor's own bindings (CodeMirror uses Ctrl+I/Ctrl+Enter too),
+// and each shortcut runs exactly once.
 document.addEventListener('keydown', (e) => {
-  if (e.defaultPrevented) return; // already handled (e.g. Ctrl+S inside the editor)
+  if (!app.project || $('ide').hidden || document.querySelector('dialog[open]')) return;
   const mod = e.ctrlKey || e.metaKey;
-  if (!app.project || $('ide').hidden) return;
-  if (document.querySelector('dialog[open]')) return;
   const k = e.key.toLowerCase();
-  if (mod && k === 'enter') { e.preventDefault(); $('btnRun').click(); }
-  else if (mod && !e.shiftKey && k === 'p') { e.preventDefault(); quickOpen(); }
-  else if (mod && !e.shiftKey && k === 's') { e.preventDefault(); save(); }
-  else if (mod && k === 'i') { e.preventDefault(); toggleAi(); }
-  else if (mod && k === '`') { e.preventDefault(); toggleBottom(); }
-  else if (mod && e.shiftKey && k === 'f') { e.preventDefault(); showView('search'); }
-  else if (mod && e.shiftKey && k === 'e') { e.preventDefault(); showView('explorer'); }
-  else if (mod && e.shiftKey && k === 'g') { e.preventDefault(); showView('git'); }
-  else if (e.key === 'F5') { e.preventDefault(); $('btnRun').click(); }
-});
+  const actions = {
+    enter: mod && !e.shiftKey && (() => $('btnRun').click()),
+    p: mod && !e.shiftKey && (() => quickOpen()),
+    s: mod && !e.shiftKey && (() => save()),
+    i: mod && !e.shiftKey && (() => toggleAi()),
+    '`': mod && (() => toggleBottom()),
+    f: mod && e.shiftKey && (() => showView('search')),
+    e: mod && e.shiftKey && (() => showView('explorer')),
+    g: mod && e.shiftKey && (() => showView('git')),
+    f5: !mod && (() => $('btnRun').click()),
+  };
+  const fn = actions[k];
+  if (!fn) return;
+  if (k === 'enter' && e.target.closest?.('#aiInput, #gitMsg')) return; // those inputs use Ctrl+Enter themselves
+  e.preventDefault();
+  e.stopPropagation();
+  fn();
+}, true);
 
 // ---------------------------------------------------------------- routing
 async function showHub() {
