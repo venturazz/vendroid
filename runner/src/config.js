@@ -106,6 +106,8 @@ export function configProblems() {
   if (sg.storeFile && (!sg.storePassword || !sg.keyAlias)) {
     p.push('RELEASE_KEYSTORE_PATH requires RELEASE_KEYSTORE_PASSWORD and RELEASE_KEY_ALIAS');
   }
+  if (Object.values(sg).some((v) => /[\r\n]/.test(v))) p.push('RELEASE_* values must not contain line breaks');
+  if (sg.storeFile && !path.isAbsolute(sg.storeFile)) p.push('RELEASE_KEYSTORE_PATH must be an absolute path');
   if (!config.projectPath || !path.isAbsolute(config.projectPath)) {
     p.push('ANDROID_PROJECT_PATH must be set to an absolute path');
   }

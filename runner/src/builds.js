@@ -15,17 +15,6 @@ const KEEP_BUFFERS = 5;
 
 class Cancelled extends Error {}
 
-/** AGP's injected signing properties (what Android Studio uses), passed as env, not argv. */
-function signingEnv() {
-  const p = 'ORG_GRADLE_PROJECT_android.injected.signing.';
-  const sg = config.signing;
-  return {
-    [`${p}store.file`]: sg.storeFile,
-    [`${p}store.password`]: sg.storePassword,
-    [`${p}key.alias`]: sg.keyAlias,
-    [`${p}key.password`]: sg.keyPassword,
-  };
-}
 
 export class BuildManager {
   constructor() {
@@ -274,9 +263,15 @@ export class BuildManager {
       ];
       const aapt2 = aapt2Path();
       if (aapt2) gradleArgs.push(`-Pandroid.aapt2FromMavenOverride=${aapt2}`);
-      const code = await this.#exec(b, ctx, path.join(config.projectPath, 'gradlew'), gradleArgs, {
-        cwd: config.projectPath, env: b.signed ? { ...env, ...signingEnv() } : env, timeoutMs: config.buildTimeoutMs,
-      });
+      if (b.signed) ensureGradleProperties({ signing: true });
+      let code;
+      try {
+        code = await this.#exec(b, ctx, path.join(config.projectPath, 'gradlew'), gradleArgs, {
+          cwd: config.projectPath, env, timeoutMs: config.buildTimeoutMs,
+        });
+      } finally {
+        if (b.signed) ensureGradleProperties(); // drop the signing secrets again
+      }
       check();
       b.exitCode = code;
       if (code !== 0) throw new Error(`Gradle exited with code ${code}`);

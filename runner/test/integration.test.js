@@ -214,7 +214,7 @@ test('build → install → launch, serialized, with live SSE and replay', async
   assert.equal(done.trigger, 'manual');
   const log = await buildLog(a.id);
   assert.match(log, /leaked-secrets: 0/);
-  assert.match(log, /signing-env: 0/);
+  assert.match(log, /signing-props: 0/);
   assert.match(log, /--no-daemon/);
   assert.match(fs.readFileSync(path.join(ctx.state, 'installs'), 'utf8'), new RegExp(`${DEVICE.replace(/\./g, '\\.')} install -r .*app-debug\\.apk`));
 
@@ -237,8 +237,12 @@ test('release build is signed via injected env, never argv', async () => {
   const b = await waitBuild(r.id);
   assert.equal(b.state, 'succeeded');
   const log = await buildLog(r.id);
-  assert.match(log, /signing-env: 4/);
+  assert.match(log, /signing-props: 4/);
+  assert.match(log, /signing-env: 0/);
   assert.ok(!log.includes('store-pass'));
+  const gp = path.join(ctx.env.GRADLE_USER_HOME, 'gradle.properties');
+  assert.ok(!fs.readFileSync(gp, 'utf8').includes('injected.signing'), 'signing secrets left behind');
+  assert.equal(fs.statSync(gp).mode & 0o077, 0, 'gradle.properties must be 0600');
 });
 
 test('cancel kills the running build process group', async () => {
