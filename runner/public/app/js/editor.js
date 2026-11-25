@@ -279,11 +279,17 @@ $('quickInput').addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowUp') { e.preventDefault(); quickSel = Math.max(0, quickSel - 1); renderQuick(); }
   else if (e.key === 'Enter') {
     e.preventDefault();
-    // Typed before the file list arrived: wait for it, then open the best match.
+    // Close at once (so the next shortcut works); if typed before the file list arrived, open the best
+    // match as soon as it does.
+    const query = $('quickInput').value;
+    const picked = $('quickList').children[quickSel]?.dataset.path;
+    $('dlgQuick').close();
+    if (picked) { openFile(picked); return; }
     filesReady.then(() => {
+      $('quickInput').value = query;
       renderQuick();
-      const p = $('quickList').children[quickSel]?.dataset.path;
-      if (p) { $('dlgQuick').close(); openFile(p); }
+      const p = $('quickList').children[0]?.dataset.path;
+      if (p) openFile(p);
     });
   }
 });
