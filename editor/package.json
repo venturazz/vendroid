@@ -1,0 +1,24 @@
+{
+  "name": "vendroid-editor-bundle",
+  "private": true,
+  "description": "Builds runner/public/vendor/codemirror.bundle.js (CodeMirror 6 + Kotlin/XML/Gradle modes). Not needed at runtime.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.js --bundle --format=esm --minify --target=es2020 --legal-comments=eof --outfile=../runner/public/vendor/codemirror.bundle.js"
+  },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6",
+    "@codemirror/commands": "^6",
+    "@codemirror/lang-json": "^6",
+    "@codemirror/lang-markdown": "^6",
+    "@codemirror/lang-xml": "^6",
+    "@codemirror/language": "^6",
+    "@codemirror/legacy-modes": "^6",
+    "@codemirror/lint": "^6",
+    "@codemirror/search": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/theme-one-dark": "^6",
+    "@codemirror/view": "^6",
+    "esbuild": "^0.25"
+  }
+}

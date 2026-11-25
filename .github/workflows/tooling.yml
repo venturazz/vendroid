@@ -1,0 +1,53 @@
+name: Tooling
+
+# Builds the vendored editor bundle and reports current library versions for the project templates.
+# The bundle is committed (the runner has no runtime npm dependencies); CI checks it is up to date.
+on:
+  workflow_dispatch:
+  push:
+    paths: ["editor/**", ".github/workflows/tooling.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  editor-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build bundle
+        working-directory: editor
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm run build
+          ls -la ../runner/public/vendor/
+      - name: Bundle up to date?
+        run: git status --porcelain runner/public/vendor editor/package-lock.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: editor-bundle
+          path: |
+            runner/public/vendor/codemirror.bundle.js
+            editor/package-lock.json
+
+  template-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Latest stable versions on Google Maven / Maven Central
+        run: |
+          G=https://dl.google.com/dl/android/maven2; C=https://repo1.maven.org/maven2
+          latest() { curl -fsSL "$1/maven-metadata.xml" | grep -oE '<version>[0-9]+(\.[0-9]+)*</version>' | sed -E 's#</?version>##g' | sort -V | tail -n1; }
+          for a in com/android/tools/build/gradle androidx/core/core-ktx androidx/appcompat/appcompat \
+                   com/google/android/material/material androidx/constraintlayout/constraintlayout \
+                   androidx/activity/activity-compose androidx/activity/activity-ktx androidx/lifecycle/lifecycle-runtime-ktx \
+                   androidx/compose/compose-bom; do
+            base=$G; case $a in org/*) base=$C ;; esac
+            echo "$a=$(latest $base/$a)"
+          done | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "kotlin=$(latest $C/org/jetbrains/kotlin/kotlin-gradle-plugin)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "junit=$(latest $C/junit/junit)" | tee -a "$GITHUB_STEP_SUMMARY"
+          curl -fsSL https://services.gradle.org/versions/current | grep -E '"(version|wrapperChecksumUrl)"' | tee -a "$GITHUB_STEP_SUMMARY"
+          curl -fsSL https://services.gradle.org/distributions/gradle-9.9.2-wrapper.jar.sha256; echo
