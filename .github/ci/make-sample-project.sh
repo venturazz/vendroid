@@ -37,7 +37,11 @@ mkdir -p "$DIR/app/src/main/java/dev/runner/sample" "$DIR/app/src/main/res/value
 cd "$DIR"
 # Generate the wrapper first, in an empty build: the host Gradle may be too old to configure the real one.
 echo 'rootProject.name = "RunnerSample"' > settings.gradle.kts
-gradle wrapper --gradle-version "$GRADLE" --distribution-type bin -q
+for attempt in 1 2 3 4; do
+  gradle wrapper --gradle-version "$GRADLE" --distribution-type bin -q && break
+  [ "$attempt" = 4 ] && exit 1
+  echo "gradle wrapper failed (attempt $attempt), retrying"; sleep $((attempt * 10))
+done
 
 cat > settings.gradle.kts <<KTS
 pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
