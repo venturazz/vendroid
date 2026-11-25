@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
-export ANDROID_PROJECT_PATH="${ANDROID_PROJECT_PATH:-/workspace/android-project}"
+export WORKSPACES_DIR="${WORKSPACES_DIR:-/workspace}"
 export DATA_DIR="${DATA_DIR:-/data}"
 
 # Gradle runs on this JDK; the other installed JDKs stay available for Gradle toolchains.
@@ -11,14 +11,24 @@ if [ -z "${JAVA_HOME:-}" ]; then
 fi
 export PATH="$JAVA_HOME/bin:$PATH"
 
-mkdir -p "$ANDROID_PROJECT_PATH" "$DATA_DIR" /root/.android
+mkdir -p "$WORKSPACES_DIR" "$DATA_DIR" /root/.android
 chmod 700 /root/.android
 
-# Optional: clone the Android project on first start (HTTPS URL; may embed a read-only token).
-if [ -n "${PROJECT_GIT_URL:-}" ] && [ ! -d "$ANDROID_PROJECT_PATH/.git" ] && [ -z "$(ls -A "$ANDROID_PROJECT_PATH")" ]; then
-  echo "[entrypoint] cloning project (branch ${PROJECT_GIT_BRANCH:-main}) into $ANDROID_PROJECT_PATH"
-  git clone --branch "${PROJECT_GIT_BRANCH:-main}" -- "$PROJECT_GIT_URL" "$ANDROID_PROJECT_PATH" \
-    || echo "[entrypoint] WARNING: clone failed; fix PROJECT_GIT_URL and redeploy"
+# v1 compatibility: a project cloned into /workspace/android-project shows up as a project in the Hub.
+# Optional first-start clone (PROJECT_GIT_URL); more projects can be created or cloned from the Hub.
+if [ -n "${PROJECT_GIT_URL:-}" ]; then
+  target="${ANDROID_PROJECT_PATH:-$WORKSPACES_DIR/$(basename "${PROJECT_GIT_URL%.git}")}"
+  if [ ! -e "$target" ] || [ -z "$(ls -A "$target" 2>/dev/null)" ]; then
+    echo "[entrypoint] cloning project (branch ${PROJECT_GIT_BRANCH:-main}) into $target"
+    if [ -n "${GIT_TOKEN:-}" ]; then
+      GIT_ASKPASS=/opt/runner/scripts/git-askpass.sh VENDROID_GIT_TOKEN="$GIT_TOKEN" GIT_TERMINAL_PROMPT=0 \
+        git -c credential.helper= clone --branch "${PROJECT_GIT_BRANCH:-main}" -- "$PROJECT_GIT_URL" "$target" \
+        || echo "[entrypoint] WARNING: clone failed; fix PROJECT_GIT_URL/GIT_TOKEN or clone from the Hub"
+    else
+      git clone --branch "${PROJECT_GIT_BRANCH:-main}" -- "$PROJECT_GIT_URL" "$target" \
+        || echo "[entrypoint] WARNING: clone failed; fix PROJECT_GIT_URL or clone from the Hub"
+    fi
+  fi
 fi
 
 # SDK install runs in the background so the dashboard is reachable immediately on first boot.

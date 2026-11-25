@@ -65,10 +65,67 @@ test('git webhook signatures', () => {
   const raw = Buffer.from(JSON.stringify({ ref: 'refs/heads/main', after: 'abc123' }));
   const sig = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
   const gh = (headers) => verifyGitWebhook({ headers: { 'content-type': 'application/json', ...headers } }, raw, secret);
-  assert.deepEqual(gh({ 'x-github-event': 'push', 'x-hub-signature-256': sig }), { ok: true, ref: 'refs/heads/main', deleted: false });
+  assert.deepEqual(gh({ 'x-github-event': 'push', 'x-hub-signature-256': sig }), { ok: true, repoUrls: [], ref: 'refs/heads/main', deleted: false });
   assert.equal(gh({ 'x-github-event': 'push', 'x-hub-signature-256': 'sha256=00' }).ok, false);
   assert.equal(gh({ 'x-github-event': 'push' }).ok, false);
   assert.equal(gh({ 'x-github-event': 'ping', 'x-hub-signature-256': sig }).ping, true);
   assert.equal(gh({ 'x-gitlab-event': 'Push Hook', 'x-gitlab-token': secret }).ref, 'refs/heads/main');
   assert.equal(gh({ 'x-gitlab-event': 'Push Hook', 'x-gitlab-token': 'nope' }).ok, false);
+});
+
+import { unifiedDiff } from '../src/diff.js';
+import { parseEdits } from '../src/aicode.js';
+import { isRelPath, isCloneUrl, isBranch, isProjectId } from '../src/validate.js';
+import { handleMcp } from '../src/mcp.js';
+
+test('unified diff', () => {
+  const a = 'a\nb\nc\nd\n';
+  const b = 'a\nB\nc\nd\ne\n';
+  assert.equal(unifiedDiff(a, b, 'x.kt'), '--- a/x.kt\n+++ b/x.kt\n@@ -1,4 +1,5 @@\n a\n-b\n+B\n c\n d\n+e\n');
+  assert.equal(unifiedDiff(a, a, 'x.kt'), '');
+  assert.match(unifiedDiff(null, 'new\n', 'n.kt'), /^--- \/dev\/null\n\+\+\+ b\/n\.kt\n@@ -0,0 \+1,1 @@\n\+new/);
+});
+
+test('SEARCH/REPLACE parsing tolerates fences, backticks and bold paths', () => {
+  const t = 'Sure.\n\n**app/src/A.kt**\n```kotlin\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n```\n\n`app/B.kt`\n<<<<<<< SEARCH\n=======\nfresh\n>>>>>>> REPLACE\nunterminated\n<<<<<<< SEARCH\nx\n';
+  assert.deepEqual(parseEdits(t), [
+    { path: 'app/src/A.kt', search: 'old', replace: 'new' },
+    { path: 'app/B.kt', search: '', replace: 'fresh' },
+  ]);
+});
+
+test('path, url, branch and project id validation', () => {
+  for (const ok of ['app/src/main/A.kt', 'README.md', '.gitignore', 'gradle/wrapper/x']) assert.ok(isRelPath(ok), ok);
+  for (const bad of ['', '/etc/passwd', '../x', 'a/../b', 'a//b', '.git/config', 'a/.git/hooks/x', 'a\\b', 'a\0b', './a']) assert.equal(isRelPath(bad), false, bad);
+  assert.ok(isCloneUrl('https://github.com/me/app.git'));
+  assert.ok(isCloneUrl('https://x-access-token:ghp_abc@github.com/me/app'));
+  for (const bad of ['http://github.com/a/b', 'git@github.com:a/b.git', 'ext::sh -c id', 'file:///tmp/x', 'https://github.com/a b', 'https://github.com/$(id)', '-uhttps://x/y']) {
+    assert.equal(isCloneUrl(bad), false, bad);
+  }
+  for (const ok of ['main', 'feature/login', 'ai/2026-11-25-x', 'v1.2']) assert.ok(isBranch(ok), ok);
+  for (const bad of ['-f', 'a..b', 'a/', '/a', 'x.lock', 'a b', 'a~1', '.hidden']) assert.equal(isBranch(bad), false, bad);
+  assert.ok(isProjectId('my-app'));
+  for (const bad of ['..', '.hidden', 'a/b', '', 'x.']) assert.equal(isProjectId(bad), false, bad);
+});
+
+test('MCP JSON-RPC: initialize, tools/list, tool errors, notifications, batches', async () => {
+  const tools = {
+    list: () => [{ name: 'echo', description: 'e', inputSchema: { type: 'object', properties: {}, required: [] } }],
+    call: async (name, args) => {
+      if (name === 'boom') throw new Error('kaput');
+      return { image: false, value: { name, args } };
+    },
+  };
+  const init = await handleMcp({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }, tools);
+  assert.equal(init.body.result.protocolVersion, '2025-06-18');
+  assert.ok(init.body.result.capabilities.tools);
+  assert.equal((await handleMcp({ jsonrpc: '2.0', method: 'notifications/initialized' }, tools)).status, 202);
+  assert.equal((await handleMcp({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, tools)).body.result.tools[0].name, 'echo');
+  const call = await handleMcp({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'echo', arguments: { a: 1 } } }, tools);
+  assert.deepEqual(JSON.parse(call.body.result.content[0].text), { name: 'echo', args: { a: 1 } });
+  const err = await handleMcp({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'boom' } }, tools);
+  assert.equal(err.body.result.isError, true);
+  assert.equal((await handleMcp({ jsonrpc: '2.0', id: 5, method: 'nope' }, tools)).body.error.code, -32601);
+  const batch = await handleMcp([{ jsonrpc: '2.0', id: 6, method: 'ping' }, { jsonrpc: '2.0', method: 'notifications/x' }], tools);
+  assert.equal(batch.body.length, 1);
 });

@@ -1,0 +1,17 @@
+{
+  "_comment": "Pinned, CI-verified on arm64 (see .github/workflows/ci.yml 'templates'). Update together.",
+  "gradle": "9.9.2",
+  "agp": "9.5.2",
+  "kotlin": "2.4.21",
+  "compileSdk": 37,
+  "compileSdkMinor": 2,
+  "targetSdk": 37,
+  "composeBom": "2026.11.01",
+  "activity": "1.13.0",
+  "coreKtx": "1.19.1",
+  "lifecycle": "2.11.1",
+  "appcompat": "1.8.0",
+  "material": "1.14.0",
+  "constraintlayout": "2.2.2",
+  "junit": "4.13.2"
+}

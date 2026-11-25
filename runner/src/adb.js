@@ -156,3 +156,30 @@ export async function startLogcat({ serial, minLevel = 'V', tag = '', q = '', pa
   });
   return { stop: () => killGroup(child, 2000), pid };
 }
+
+/** One-shot logcat dump (for agents): last `lines` lines, filtered like the live stream. */
+export async function logcatDump(serial, { lines = 300, minLevel = 'V', packageName = '', q = '' } = {}) {
+  need(serial);
+  const n = Math.min(Math.max(Number(lines) || 300, 10), 5000);
+  const args = ['-s', serial, 'logcat', '-d', '-v', 'threadtime', '-t', String(n * 4)];
+  if (packageName) {
+    needPkg(packageName);
+    const r = await adb(['-s', serial, 'shell', 'pidof', '-s', packageName], { timeoutMs: 8_000 });
+    const pid = r.stdout.trim();
+    if (/^\d+$/.test(pid)) args.push(`--pid=${pid}`);
+  }
+  const r = await adb(args, { timeoutMs: 20_000 });
+  if (r.code !== 0) throw new Error((r.stderr || r.error || 'logcat failed').trim());
+  const min = LEVEL_RANK[minLevel] ?? 0;
+  const qL = String(q).toLowerCase();
+  const out = [];
+  for (const line of r.stdout.split('\n')) {
+    const m = TL.exec(line);
+    const level = m ? (m[1] === 'A' ? 'E' : m[1]) : null;
+    if (level && (LEVEL_RANK[level] ?? 0) < min) continue;
+    if (!level && min > 0) continue;
+    if (qL && !line.toLowerCase().includes(qL)) continue;
+    out.push(line);
+  }
+  return out.slice(-n).join('\n');
+}

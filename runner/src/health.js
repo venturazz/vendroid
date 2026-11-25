@@ -48,7 +48,8 @@ export async function envHealth() {
     aapt2.ok = v.code === 0;
     aapt2.version = (v.stdout + v.stderr).trim().split('\n')[0] || v.error || null;
   }
-  const projectOk = !!config.projectPath && fs.existsSync(path.join(config.projectPath, 'gradlew'));
+  // v1 single project (optional in v2): only checked when ANDROID_PROJECT_PATH is configured.
+  const projectOk = !config.projectPath || fs.existsSync(path.join(config.projectPath, 'gradlew'));
   const [dataDisk, projDisk] = await Promise.all([freeDisk(config.dataDir), freeDisk(projectOk ? config.projectPath : config.dataDir)]);
   const checks = {
     aarch64: arch === 'arm64' || uname.stdout.trim() === 'aarch64',

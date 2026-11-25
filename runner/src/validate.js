@@ -44,3 +44,32 @@ export class HttpError extends Error {
   }
 }
 export const bad = (msg) => new HttpError(400, msg);
+
+// ---- projects / files / git -------------------------------------------------------------------
+import { config as _cfg } from './config.js';
+
+/** Project id == folder name in WORKSPACES_DIR. */
+export const isProjectId = (s) => typeof s === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(s) && !s.endsWith('.') && s !== '..';
+
+/** https remote, optional user[:token]@, no whitespace/quotes/shell characters. file:// only when ALLOW_FILE_REMOTES. */
+export function isCloneUrl(s) {
+  if (typeof s !== 'string' || s.length > 500) return false;
+  if (/^https:\/\/([^\s@/:"'`$\\]+(:[^\s@/"'`$\\]+)?@)?[A-Za-z0-9.-]+(:\d{1,5})?\/[A-Za-z0-9._~%/+-]+$/.test(s)) return true;
+  return _cfg.allowFileRemotes && /^file:\/\/\/[A-Za-z0-9._/-]+$/.test(s);
+}
+
+/** Simplified `git check-ref-format --branch`. */
+export function isBranch(s) {
+  return typeof s === 'string' && s.length <= 100 && /^[A-Za-z0-9._/-]+$/.test(s) && !s.startsWith('-')
+    && !s.startsWith('/') && !s.endsWith('/') && !s.endsWith('.') && !s.endsWith('.lock') && !s.includes('..')
+    && !s.includes('//') && !s.includes('/.') && !s.startsWith('.');
+}
+
+/** Relative path inside a project: forward slashes, no '..', no .git, no NUL/control characters. */
+export function isRelPath(s, { allowEmpty = false } = {}) {
+  if (typeof s !== 'string' || s.length > 1000) return false;
+  if (s === '' || s === '.') return allowEmpty;
+  if (s.startsWith('/') || s.includes('\\') || /[\x00-\x1f]/.test(s)) return false;
+  const parts = s.split('/');
+  return parts.every((p) => p !== '' && p !== '.' && p !== '..') && !parts.some((p) => p === '.git');
+}

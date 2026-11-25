@@ -31,8 +31,11 @@ export function verifyGitWebhook(req, raw, secret) {
     return { ok: false, reason: 'Invalid JSON payload' };
   }
   if (event && !/push/i.test(event)) return { ok: true, ref: null };
+  const repo = payload.repository || payload.project || {};
   return {
     ok: true,
+    repoUrls: [repo.clone_url, repo.html_url, repo.ssh_url, repo.git_http_url, repo.git_ssh_url, repo.web_url, repo.url]
+      .filter((u) => typeof u === 'string'),
     ref: typeof payload.ref === 'string' ? payload.ref : null,
     deleted: payload.deleted === true || /^0+$/.test(String(payload.after || '1')),
   };

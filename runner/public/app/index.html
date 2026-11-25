@@ -1,108 +1,266 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Android Runner</title><link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/style.css"></head>
+<title>Vendroid</title><link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/style.css"></head>
 <body>
-<header class="top">
-  <strong class="brand">🤖 Android Runner</strong>
+<header class="topbar">
+  <a class="brand" href="#/" title="Project Hub"><img src="/assets/favicon.svg" alt=""> Vendroid</a>
+  <div class="proj-switch" id="projSwitch" hidden>
+    <button id="projBtn" class="ghost" title="Switch project"><span id="projName">—</span> ▾</button>
+    <div id="projMenu" class="menu" hidden></div>
+  </div>
+  <div class="runbar" id="runbar" hidden>
+    <select id="task" title="Build variant"><option>assembleDebug</option><option>assembleRelease</option><option>clean assembleDebug</option></select>
+    <button id="btnRun" class="primary" title="Build, install and launch (Ctrl+Enter)">▶ Run</button>
+    <button id="btnBuildOnly" title="Build only">⚒ Build</button>
+    <button id="btnCancel" class="danger" title="Cancel the running build" disabled>■</button>
+    <button id="btnRunOpts" class="ghost" title="Run options">⚙▾</button>
+    <div id="runOpts" class="menu" hidden>
+      <label class="chk"><input type="checkbox" id="oGit"> Git pull before build</label>
+      <label class="chk"><input type="checkbox" id="oFollow" checked> Open Logcat after launch</label>
+      <label class="chk"><input type="checkbox" id="oHermes"> Notify Hermes on failure</label>
+    </div>
+    <span id="buildPill" class="pill" title="Build queue">idle</span>
+  </div>
+  <span class="grow"></span>
   <button id="envBadge" class="badge" title="Environment health (click for details)">env …</button>
   <span id="aiBadge" class="badge">AI …</span>
-  <span class="grow"></span>
   <span id="devBadge" class="badge">device …</span>
-  <input id="quickTarget" placeholder="tunnel_ip:5555" size="17" spellcheck="false" aria-label="Device address">
+  <input id="quickTarget" placeholder="tunnel_ip:5555" size="16" spellcheck="false" aria-label="Device address">
   <button id="quickConnect">Connect</button>
-  <button id="quickReconnect" title="Disconnect + connect">Reconnect</button>
-  <button id="adbRestart" title="adb kill-server, start-server">Restart ADB</button>
-  <button id="logout" title="Sign out">🔒 Logout</button>
+  <button id="btnMore" class="ghost" title="More">⋯</button>
+  <div id="moreMenu" class="menu right" hidden>
+    <button data-act="reconnect">Reconnect device</button>
+    <button data-act="restartAdb">Restart ADB server</button>
+    <hr>
+    <button data-act="settings">Settings & Agents (MCP)</button>
+    <button data-act="logout">Log out</button>
+  </div>
 </header>
 
-<div id="toast" class="toast" role="status" hidden></div>
-<dialog id="envDlg">
-  <h3>Environment</h3>
-  <table id="envTable" class="kv"></table>
-  <details><summary>Raw JSON</summary><pre id="envPre"></pre></details>
-  <form method="dialog"><button>Close</button></form>
-</dialog>
-
-<main class="layout">
-  <aside class="panel">
-    <h2>Build</h2>
-    <label>Variant
-      <select id="task"><option>assembleDebug</option><option>assembleRelease</option><option>clean assembleDebug</option></select>
-    </label>
-    <p id="signHint" class="hint" hidden></p>
-    <label>Package <input id="pkg" spellcheck="false" placeholder="com.example.app"></label>
-    <label class="chk"><input type="checkbox" id="oGit"> Git Pull</label>
-    <label class="chk"><input type="checkbox" id="oInstall" checked> Auto-Install</label>
-    <label class="chk"><input type="checkbox" id="oLaunch" checked> Auto-Launch</label>
-    <label class="chk"><input type="checkbox" id="oFollow" checked> Open Logcat after launch</label>
-    <label class="chk"><input type="checkbox" id="oHermes"> Auto-Notify Hermes</label>
+<!-- ============================== Project Hub ============================== -->
+<main id="hub" class="hub" hidden>
+  <section class="hub-head">
+    <div>
+      <h1>Projects</h1>
+      <p class="muted" id="hubWs"></p>
+    </div>
     <div class="row">
-      <button id="btnBuild" class="primary" title="Ctrl/⌘ + Enter">Build &amp; Deploy</button>
-      <button id="btnCancel" class="danger" disabled>Cancel</button>
-    </div>
-    <h2>History</h2>
-    <ul id="history" class="history"></ul>
-    <p id="histEmpty" class="muted small">No builds yet. Press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start one.</p>
-  </aside>
-
-  <section class="work">
-    <nav class="tabs" role="tablist">
-      <button data-tab="console" class="active" role="tab">Build Console</button>
-      <button data-tab="logcat" role="tab">Device Logcat <span id="crashChip" class="chip err" hidden>crash</span></button>
-      <button data-tab="screen" role="tab">Device Screen &amp; Actions</button>
-    </nav>
-
-    <div id="tab-console" class="tab">
-      <div class="bar wrap">
-        <span id="bState" class="pill">idle</span><span id="bId" class="muted"></span>
-        <span id="bCommit" class="muted small"></span>
-        <span id="bTimer" class="muted">00:00</span><span class="grow"></span>
-        <label class="chk"><input type="checkbox" id="bScroll" checked> autoscroll</label>
-        <a id="bLogDl" class="btn" hidden>Download log</a>
-        <button id="btnAnalyze">Analyze Error (9Router)</button>
-        <button id="btnInvestigate">Investigate (Hermes)</button>
-      </div>
-      <pre id="bLog" class="log" tabindex="0"></pre>
-      <div id="aiOut" class="ai" hidden></div>
-    </div>
-
-    <div id="tab-logcat" class="tab" hidden>
-      <div class="bar wrap">
-        <select id="lcSerial" title="Device"></select>
-        <select id="lcLevel" title="Minimum level"><option>V</option><option>D</option><option>I</option><option>W</option><option>E</option></select>
-        <input id="lcTag" placeholder="tag" size="12" spellcheck="false">
-        <input id="lcQ" placeholder="keyword" size="14" spellcheck="false">
-        <input id="lcPkg" placeholder="package (pid filter)" size="20" spellcheck="false">
-        <button id="lcStart" class="primary">Start</button>
-        <button id="lcPause" disabled>Pause</button>
-        <button id="lcClear">Clear</button>
-        <button id="lcExport">Export .log</button>
-        <label class="chk"><input type="checkbox" id="lcScroll" checked> autoscroll</label>
-        <span id="lcStatus" class="muted small"></span>
-        <span class="grow"></span>
-        <button id="lcTriage">Triage Crash (9Router)</button>
-        <button id="lcHermes">Investigate (Hermes)</button>
-      </div>
-      <pre id="lcLog" class="log" tabindex="0"></pre>
-      <div id="lcAi" class="ai" hidden></div>
-    </div>
-
-    <div id="tab-screen" class="tab" hidden>
-      <div class="bar wrap">
-        <select id="scSerial" title="Device"></select>
-        <button id="scCapture" class="primary">Capture Screen</button>
-        <label class="chk"><input type="checkbox" id="scAuto"> auto-refresh (3s)</label>
-        <a id="scSave" class="btn" hidden>Save PNG</a>
-        <span class="grow"></span>
-        <button id="scInstall">Install Latest APK</button>
-        <button id="scLaunch">Launch</button>
-        <button id="scStop">Force Stop</button>
-        <button id="scClear" class="danger">Clear App Data</button>
-      </div>
-      <div class="shot"><img id="scImg" alt="Device screenshot" hidden><p id="scHint" class="muted">No screenshot yet. Click <b>Capture Screen</b>.</p></div>
+      <button id="hubNew" class="primary">＋ New Project</button>
+      <button id="hubClone">⤓ Clone from Git</button>
     </div>
   </section>
+  <div id="hubGrid" class="hub-grid"></div>
+  <p id="hubEmpty" class="hub-empty muted" hidden>No projects yet. Create one from a template or clone a repository.</p>
 </main>
-<script src="/assets/app.js" type="module"></script>
+
+<!-- ============================== IDE ============================== -->
+<main id="ide" class="ide" hidden>
+  <nav class="activitybar" aria-label="Views">
+    <button data-view="explorer" class="active" title="Explorer (Ctrl+Shift+E)">🗂</button>
+    <button data-view="search" title="Search (Ctrl+Shift+F)">🔍</button>
+    <button data-view="git" title="Source Control (Ctrl+Shift+G)">⎇<span id="gitBadge" class="dot" hidden></span></button>
+    <span class="grow"></span>
+    <button id="btnAiToggle" title="AI Assistant (Ctrl+I)">✨</button>
+  </nav>
+
+  <aside class="sidebar" id="sidebar">
+    <section data-pane="explorer" class="pane">
+      <div class="pane-head"><span>EXPLORER</span><span class="grow"></span>
+        <button class="icon" id="exNewFile" title="New file">＋</button>
+        <button class="icon" id="exNewDir" title="New folder">🗀</button>
+        <button class="icon" id="exRefresh" title="Refresh">⟳</button>
+        <button class="icon" id="exHidden" title="Show build/hidden folders">👁</button>
+      </div>
+      <div id="tree" class="tree" tabindex="0"></div>
+    </section>
+    <section data-pane="search" class="pane" hidden>
+      <div class="pane-head"><span>SEARCH</span></div>
+      <input id="searchInput" placeholder="Search in project" spellcheck="false">
+      <div id="searchResults" class="search-results"></div>
+    </section>
+    <section data-pane="git" class="pane" hidden>
+      <div class="pane-head"><span>SOURCE CONTROL</span><span class="grow"></span>
+        <button class="icon" id="gitRefresh" title="Refresh">⟳</button>
+      </div>
+      <div id="gitBody" class="git-body"></div>
+    </section>
+  </aside>
+  <div class="resizer v" data-resize="sidebar"></div>
+
+  <section class="center">
+    <div class="editor-area">
+      <div id="tabs" class="tabs" role="tablist"></div>
+      <div id="editorHost" class="editor-host"></div>
+      <div id="welcome" class="welcome">
+        <h2 id="welcomeTitle">Vendroid</h2>
+        <p class="muted">Open a file from the Explorer, or press <kbd>Ctrl</kbd>+<kbd>P</kbd>.</p>
+        <ul class="shortcuts">
+          <li><kbd>Ctrl</kbd>+<kbd>Enter</kbd> Run on phone</li>
+          <li><kbd>Ctrl</kbd>+<kbd>S</kbd> Save</li>
+          <li><kbd>Ctrl</kbd>+<kbd>P</kbd> Quick open</li>
+          <li><kbd>Ctrl</kbd>+<kbd>I</kbd> AI assistant</li>
+          <li><kbd>Ctrl</kbd>+<kbd>`</kbd> Toggle bottom panel</li>
+        </ul>
+      </div>
+    </div>
+    <div class="resizer h" data-resize="bottom"></div>
+    <section class="bottom" id="bottom">
+      <div class="bottom-tabs">
+        <button data-btab="build" class="active">Build Output</button>
+        <button data-btab="logcat">Logcat <span id="crashChip" class="chip err" hidden>crash</span></button>
+        <button data-btab="device">Device</button>
+        <span class="grow"></span>
+        <button class="icon" id="bottomToggle" title="Hide panel (Ctrl+`)">▾</button>
+      </div>
+      <div data-bpane="build" class="bpane">
+        <div class="bar">
+          <select id="buildSel" title="Build history"></select>
+          <span id="bState" class="pill">idle</span>
+          <span id="bTimer" class="muted">00:00</span>
+          <span id="bCommit" class="muted small ellipsis"></span>
+          <span class="grow"></span>
+          <label class="chk"><input type="checkbox" id="bScroll" checked> autoscroll</label>
+          <a id="bApk" class="btn" hidden>⬇ APK</a>
+          <a id="bLogDl" class="btn" hidden>Log</a>
+          <button id="btnAnalyze" disabled>Analyze Error (9Router)</button>
+          <button id="btnFixAi" disabled title="Send the error to the AI assistant">Fix with AI</button>
+          <button id="btnInvestigate" disabled>Investigate (Hermes)</button>
+        </div>
+        <pre id="bLog" class="log" tabindex="0"></pre>
+        <div id="aiOut" class="ai-out" hidden></div>
+      </div>
+      <div data-bpane="logcat" class="bpane" hidden>
+        <div class="bar wrap">
+          <select id="lcSerial" title="Device"></select>
+          <select id="lcLevel" title="Minimum level"><option>V</option><option>D</option><option>I</option><option>W</option><option>E</option></select>
+          <input id="lcTag" placeholder="tag" size="10" spellcheck="false">
+          <input id="lcQ" placeholder="keyword" size="12" spellcheck="false">
+          <label class="chk" title="Only this project's app"><input type="checkbox" id="lcOnlyApp" checked> this app</label>
+          <button id="lcStart" class="primary">Start</button>
+          <button id="lcPause" disabled>Pause</button>
+          <button id="lcClear">Clear</button>
+          <button id="lcExport">Export</button>
+          <label class="chk"><input type="checkbox" id="lcScroll" checked> autoscroll</label>
+          <span id="lcStatus" class="muted small"></span>
+          <span class="grow"></span>
+          <button id="lcTriage">Triage Crash (9Router)</button>
+          <button id="lcFixAi">Fix with AI</button>
+          <button id="lcHermes">Investigate (Hermes)</button>
+        </div>
+        <pre id="lcLog" class="log" tabindex="0"></pre>
+        <div id="lcAi" class="ai-out" hidden></div>
+      </div>
+      <div data-bpane="device" class="bpane" hidden>
+        <div class="bar wrap">
+          <select id="scSerial" title="Device"></select>
+          <button id="scCapture" class="primary">Capture Screen</button>
+          <label class="chk"><input type="checkbox" id="scAuto"> auto-refresh 3s</label>
+          <a id="scSave" class="btn" hidden>Save PNG</a>
+          <span class="grow"></span>
+          <button id="scInstall">Install latest</button>
+          <button id="scLaunch">Launch</button>
+          <button id="scStop">Force Stop</button>
+          <button id="scClear" class="danger">Clear Data</button>
+        </div>
+        <div class="shot"><img id="scImg" alt="Device screenshot" hidden><p id="scHint" class="muted">Capture the phone screen on demand.</p></div>
+      </div>
+    </section>
+  </section>
+
+  <div class="resizer v" data-resize="ai" id="aiResizer" hidden></div>
+  <aside class="aipanel" id="aipanel" hidden>
+    <div class="pane-head"><span>✨ AI ASSISTANT</span><span class="grow"></span>
+      <button class="icon" id="aiClear" title="New conversation">🗑</button>
+      <button class="icon" id="aiClose" title="Close (Ctrl+I)">✕</button>
+    </div>
+    <div id="aiMessages" class="ai-messages"></div>
+    <div class="ai-compose">
+      <div id="aiCtx" class="ai-ctx"></div>
+      <textarea id="aiInput" rows="3" placeholder="Describe a screen, feature or fix… (Enter to send, Shift+Enter for a new line)"></textarea>
+      <div class="row">
+        <button id="aiAddFile" class="ghost small" title="Add a file to the context">＋ file</button>
+        <label class="chk small" title="Include the latest build error"><input type="checkbox" id="aiWithBuild"> build error</label>
+        <span class="grow"></span>
+        <button id="aiHermes" class="small" title="Hand this task to Hermes Agent (works through MCP tools)">Send to Hermes</button>
+        <button id="aiSend" class="primary small">Send</button>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<footer class="statusbar" id="statusbar" hidden>
+  <span id="sbBranch" title="Git branch">⎇ —</span>
+  <span id="sbChanges"></span>
+  <span class="grow"></span>
+  <span id="sbQueue"></span>
+  <span id="sbCursor"></span>
+  <span id="sbLang"></span>
+  <span id="sbPkg" class="muted"></span>
+</footer>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<!-- ============================== dialogs ============================== -->
+<dialog id="dlgNew">
+  <form method="dialog" id="formNew">
+    <h3>New Android project</h3>
+    <label>App name <input id="npName" required maxlength="40" placeholder="My App" autocomplete="off"></label>
+    <label>Package name <input id="npPkg" required placeholder="com.example.myapp" spellcheck="false" autocomplete="off"></label>
+    <fieldset class="tpl">
+      <legend>Template</legend>
+      <label class="card-radio"><input type="radio" name="tpl" value="compose" checked><b>Jetpack Compose</b><span class="muted small">Material 3, single activity, preview</span></label>
+      <label class="card-radio"><input type="radio" name="tpl" value="views"><b>XML Views</b><span class="muted small">AppCompat, Material Components, ViewBinding, ConstraintLayout</span></label>
+    </fieldset>
+    <label>Minimum SDK <select id="npMin"><option value="24" selected>24 (Android 7.0)</option><option value="26">26 (Android 8.0)</option><option value="28">28 (Android 9)</option><option value="29">29 (Android 10)</option><option value="31">31 (Android 12)</option><option value="33">33 (Android 13)</option></select></label>
+    <p class="muted small">Kotlin, Gradle Kotlin DSL, AGP and Gradle versions verified on this ARM64 server. A git repository is initialized with the first commit.</p>
+    <p class="err" id="npErr"></p>
+    <div class="row end"><button type="button" data-close>Cancel</button><button id="npCreate" class="primary" value="ok">Create</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgClone">
+  <form method="dialog" id="formClone">
+    <h3>Clone a repository</h3>
+    <label>HTTPS URL <input id="clUrl" required placeholder="https://github.com/you/app.git" spellcheck="false" autocomplete="off"></label>
+    <label>Branch (optional) <input id="clBranch" placeholder="main" spellcheck="false" autocomplete="off"></label>
+    <p class="muted small" id="clHint"></p>
+    <p class="err" id="clErr"></p>
+    <div class="row end"><button type="button" data-close>Cancel</button><button id="clGo" class="primary" value="ok">Clone</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgSettings">
+  <h3>Settings</h3>
+  <h4>Agents (MCP) — let Hermes build, read/edit code and drive the phone</h4>
+  <table class="kv">
+    <tr><td>MCP endpoint (same host / host network)</td><td><code id="mcpLocal"></code> <button class="small" data-copy="mcpLocal">Copy</button></td></tr>
+    <tr><td>MCP endpoint (any container, via your domain)</td><td><code id="mcpPublic"></code> <button class="small" data-copy="mcpPublic">Copy</button></td></tr>
+    <tr><td>Bearer token</td><td><code id="mcpToken" class="secret">••••••••</code> <button class="small" id="mcpShow">Show</button> <button class="small" data-copy="mcpToken">Copy</button> <button class="small" id="mcpRotate">Rotate</button></td></tr>
+    <tr><td>REST tools</td><td><code>GET /api/agent/tools</code>, <code>POST /api/agent/tools/&lt;name&gt;</code></td></tr>
+    <tr><td>Hermes webhook</td><td id="hermesInfo"></td></tr>
+  </table>
+  <details><summary>Hermes Agent config snippet</summary><pre id="hermesSnippet" class="snippet"></pre></details>
+  <h4>Git</h4>
+  <p class="muted small" id="gitInfo"></p>
+  <h4>Environment</h4>
+  <table id="envTable" class="kv"></table>
+  <div class="row end"><button id="settingsClose">Close</button></div>
+</dialog>
+
+<dialog id="dlgQuick" class="quick">
+  <input id="quickInput" placeholder="Go to file…" spellcheck="false" autocomplete="off">
+  <ul id="quickList"></ul>
+</dialog>
+
+<dialog id="dlgPrompt">
+  <form method="dialog" id="formPrompt">
+    <h3 id="prTitle"></h3>
+    <p id="prText" class="muted small"></p>
+    <input id="prInput" spellcheck="false" autocomplete="off">
+    <div class="row end"><button type="button" data-close>Cancel</button><button id="prOk" class="primary" value="ok">OK</button></div>
+  </form>
+</dialog>
+
+<script src="/assets/js/main.js" type="module"></script>
 </body></html>

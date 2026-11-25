@@ -24,6 +24,7 @@ case "$1" in
     echo "11-25 10:00:00.200  100  100 D Noise   : debug noise"
     echo "11-25 10:00:01.123  100  100 E AndroidRuntime: FATAL EXCEPTION: main"
     echo "11-25 10:00:01.124  100  100 E AndroidRuntime: java.lang.IllegalStateException: boom"
+    case "$*" in *" -d "*) exit 0 ;; esac
     exec sleep 60 ;;
   shell)
     shift

@@ -3,7 +3,7 @@
 # direct-Linux setup script. Safe to re-run; it skips whatever is already present.
 #
 #   ANDROID_HOME          SDK location                        (default /opt/android-sdk)
-#   SDK_PACKAGES          sdkmanager packages (space separated) (default "platforms;android-35 build-tools;35.0.0")
+#   SDK_PACKAGES          sdkmanager packages (space separated) (default "platforms;android-36 build-tools;36.0.0")
 #   CMDLINE_TOOLS_BUILD   cmdline-tools zip build number      (default 11076708)
 #   AAPT2_MODE            auto | box64 | prebuilt | path | apt (default auto)
 #   AAPT2_BINARY          native aarch64 aapt2 for mode "path"
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
-SDK_PACKAGES="${SDK_PACKAGES:-platforms;android-35 build-tools;35.0.0}"
+SDK_PACKAGES="${SDK_PACKAGES:-platforms;android-36 build-tools;36.0.0}"
 CMDLINE_TOOLS_BUILD="${CMDLINE_TOOLS_BUILD:-11076708}"
 AAPT2_MODE="${AAPT2_MODE:-auto}"
 

@@ -11,7 +11,7 @@ APP_DIR=/opt/android-runner
 SDK_DIR=/opt/android-sdk
 STATE_DIR=/var/lib/android-runner
 ENV_FILE=/etc/android-runner.env
-PROJECT_DIR=/srv/android-project
+WS_DIR=$STATE_DIR/workspaces
 SVC_USER=android-runner
 log() { echo -e "\033[1;32m==>\033[0m $*"; }
 # Commands below run as the service user, which usually cannot read the caller's working directory.
@@ -41,11 +41,11 @@ fi
 
 log "creating user and directories"
 id "$SVC_USER" >/dev/null 2>&1 || useradd --system --home-dir "$STATE_DIR" --create-home --shell /usr/sbin/nologin "$SVC_USER"
-mkdir -p "$APP_DIR" "$SDK_DIR" "$PROJECT_DIR" "$STATE_DIR/data" "$STATE_DIR/.android" "$STATE_DIR/.gradle"
+mkdir -p "$APP_DIR" "$SDK_DIR" "$WS_DIR" "$STATE_DIR/data" "$STATE_DIR/.android" "$STATE_DIR/.gradle"
 rsync -a --delete --exclude node_modules --exclude data --exclude test "$REPO_DIR/runner/" "$APP_DIR/"
 chown -R root:root "$APP_DIR"
 chmod +x "$APP_DIR"/scripts/*.sh
-chown -R "$SVC_USER:$SVC_USER" "$STATE_DIR" "$SDK_DIR" "$PROJECT_DIR"
+chown -R "$SVC_USER:$SVC_USER" "$STATE_DIR" "$SDK_DIR"
 chmod 700 "$STATE_DIR/.android"
 
 JAVA_HOME_17="/usr/lib/jvm/java-17-openjdk-$(dpkg --print-architecture)"
@@ -61,10 +61,13 @@ fi
 chgrp "$SVC_USER" "$ENV_FILE"
 chmod 640 "$ENV_FILE"
 
-# Optional first clone of the Android project
-if [ -n "${PROJECT_GIT_URL:-}" ] && [ -z "$(ls -A "$PROJECT_DIR")" ]; then
-  log "cloning $PROJECT_GIT_URL"
-  sudo -u "$SVC_USER" env HOME="$STATE_DIR" git clone --branch "${PROJECT_GIT_BRANCH:-main}" -- "$PROJECT_GIT_URL" "$PROJECT_DIR"
+# Optional first project (more can be created or cloned from the Project Hub)
+if [ -n "${PROJECT_GIT_URL:-}" ]; then
+  target="$WS_DIR/$(basename "${PROJECT_GIT_URL%.git}")"
+  if [ ! -e "$target" ]; then
+    log "cloning $PROJECT_GIT_URL into $target"
+    sudo -u "$SVC_USER" env HOME="$STATE_DIR" git clone --branch "${PROJECT_GIT_BRANCH:-main}" -- "$PROJECT_GIT_URL" "$target"
+  fi
 fi
 
 if [ "${SKIP_SDK:-0}" != "1" ]; then
@@ -98,8 +101,8 @@ systemctl is-active --quiet android-runner && log "android-runner is running" ||
 
 echo
 log "Next steps"
-echo "  1. Edit $ENV_FILE: DEFAULT_PACKAGE_NAME, DEFAULT_DEVICE_ADDRESS, AI keys; then: systemctl restart android-runner"
-[ -z "$(ls -A "$PROJECT_DIR")" ] && echo "  2. Put your project in $PROJECT_DIR:  sudo -u $SVC_USER git clone <url> $PROJECT_DIR"
+echo "  1. Edit $ENV_FILE: DEFAULT_DEVICE_ADDRESS, GIT_TOKEN, AI keys; then: systemctl restart android-runner"
+echo "  2. Open the dashboard → Project Hub → New Project or Clone (projects live in $WS_DIR)"
 echo "  3. HTTPS: deploy/proxy/Caddyfile (Caddy) or deploy/proxy/nginx.conf (Nginx) -> 127.0.0.1:3080"
 [ -n "$NEW_PASSWORD" ] && echo -e "\n  Dashboard password: \033[1m$NEW_PASSWORD\033[0m  (stored in $ENV_FILE)"
 echo "  Logs: journalctl -u android-runner -f"

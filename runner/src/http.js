@@ -60,7 +60,7 @@ export function sendJson(res, status, body, headers = {}) {
   res.end(data);
 }
 
-export function readJson(req, limit = 1024 * 1024) {
+export function readJson(req, limit = 1024 * 1024, { allowArray = false } = {}) {
   return new Promise((resolve, reject) => {
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return resolve({});
     const ct = req.headers['content-type'] || '';
@@ -84,10 +84,10 @@ export function readJson(req, limit = 1024 * 1024) {
       if (!size) return resolve({});
       try {
         const v = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error();
+        if (v === null || typeof v !== 'object' || (Array.isArray(v) && !allowArray)) throw new Error();
         resolve(v);
       } catch {
-        reject(new HttpError(400, 'Body must be a JSON object'));
+        reject(new HttpError(400, allowArray ? 'Body must be JSON' : 'Body must be a JSON object'));
       }
     });
     req.on('error', reject);

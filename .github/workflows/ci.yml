@@ -32,6 +32,14 @@ jobs:
         run: shellcheck -S warning runner/scripts/*.sh .github/ci/*.sh
       - name: Validate compose file
         run: docker compose -f docker-compose.yml config -q
+      - name: Template Gradle wrapper matches the official checksum
+        run: |
+          v=$(node -p "require('./runner/templates/versions.json').gradle")
+          want=$(curl -fsSL "https://services.gradle.org/distributions/gradle-$v-wrapper.jar.sha256")
+          have=$(sha256sum runner/templates/wrapper/gradle/wrapper/gradle-wrapper.jar | cut -d' ' -f1)
+          echo "gradle $v wrapper: want $want have $have"; [ "$want" = "$have" ]
+      - name: Editor bundle is committed
+        run: test -s runner/public/vendor/codemirror.bundle.js
 
   ui:
     name: Dashboard in a real browser
@@ -100,6 +108,7 @@ jobs:
       - name: End-to-end through the API
         env:
           E2E_OUT: ${{ runner.temp }}/e2e
+          E2E_TEMPLATES: ${{ matrix.stack == 'latest' && '1' || '0' }}
         run: .github/ci/e2e.sh http://127.0.0.1:3080 "$AUTH_PASSWORD" dev.runner.sample
       - name: Verify APKs with SDK tools inside the container
         run: |
@@ -107,6 +116,12 @@ jobs:
           docker compose cp "${{ runner.temp }}/e2e/release.apk" runner:/tmp/release.apk
           docker compose exec -T runner bash /ci/verify-apk.sh /tmp/debug.apk dev.runner.sample
           docker compose exec -T runner bash /ci/verify-apk.sh /tmp/release.apk dev.runner.sample RunnerCI
+          if [ -f "${{ runner.temp }}/e2e/template-compose.apk" ]; then
+            for t in compose views; do
+              docker compose cp "${{ runner.temp }}/e2e/template-$t.apk" runner:/tmp/template-$t.apk
+              docker compose exec -T runner bash /ci/verify-apk.sh /tmp/template-$t.apk dev.ci.$t
+            done
+          fi
       - name: Edge relay serves the dashboard
         run: |
           docker compose exec -T edge node -e "
@@ -121,6 +136,8 @@ jobs:
           curl -fsS -c j -H 'Content-Type: application/json' -d "{\"password\":\"$AUTH_PASSWORD\"}" http://127.0.0.1:3080/api/auth/login
           n=$(curl -fsS -b j http://127.0.0.1:3080/api/builds | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).builds.length))')
           echo "builds after redeploy: $n"; [ "$n" -ge 3 ]
+          p=$(curl -fsS -b j http://127.0.0.1:3080/api/projects | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).projects.map(p=>p.id).join(",")))')
+          echo "projects after redeploy: $p"; echo "$p" | grep -q android-project
           docker compose exec -T runner test -s /root/.android/adbkey && echo "ADB key persisted"
       - name: Logs
         if: always()
@@ -175,7 +192,7 @@ jobs:
           E2E_OUT: ${{ runner.temp }}/e2e
         run: |
           PW="$(sudo sed -n 's/^AUTH_PASSWORD=//p' /etc/android-runner.env)"
-          .github/ci/e2e.sh http://127.0.0.1:3080 "$PW" dev.runner.sample
+          E2E_TEMPLATES=1 .github/ci/e2e.sh http://127.0.0.1:3080 "$PW" dev.runner.sample
       - name: Verify APKs
         run: |
           install -m 644 "${{ runner.temp }}/e2e/release.apk" /tmp/release.apk

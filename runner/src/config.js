@@ -36,7 +36,11 @@ export const config = {
   listenSocket: env.LISTEN_SOCKET || '',
   dataDir: path.resolve(env.DATA_DIR || path.join(process.cwd(), 'data')),
 
-  // Workspace
+  // Workspace: every project is a folder in WORKSPACES_DIR. ANDROID_PROJECT_PATH (the single-project
+  // setting from v1) is still honoured and imported as a project on first start.
+  // Default: a "workspaces" folder next to DATA_DIR (never the parent of ANDROID_PROJECT_PATH, which
+  // could be a shared folder like /srv); a v1 project outside it is linked in at startup.
+  workspacesDir: path.resolve(env.WORKSPACES_DIR || path.join(path.dirname(path.resolve(env.DATA_DIR || path.join(process.cwd(), 'data'))), 'workspaces')),
   projectPath: env.ANDROID_PROJECT_PATH || '',
   appModule: env.APP_MODULE || 'app',
   defaultPackage: env.DEFAULT_PACKAGE_NAME || '',
@@ -65,6 +69,17 @@ export const config = {
     keyPassword: env.RELEASE_KEY_PASSWORD || env.RELEASE_KEYSTORE_PASSWORD || '',
   },
 
+  // Git: identity for commits and an optional token for clone/pull/push over HTTPS (given to git via
+  // GIT_ASKPASS, never on the command line). Only https:// remotes are allowed.
+  gitToken: env.GIT_TOKEN || env.GITHUB_TOKEN || '',
+  gitUserName: env.GIT_USER_NAME || 'Vendroid',
+  gitUserEmail: env.GIT_USER_EMAIL || 'vendroid@localhost',
+  allowFileRemotes: bool('ALLOW_FILE_REMOTES', false), // tests only
+
+  // Agent API (MCP + REST) for Hermes and other tools. Bearer token; falls back to API_TOKEN.
+  mcpToken: env.MCP_TOKEN || '',
+  mcpAllowWrite: bool('MCP_ALLOW_WRITE', true),
+
   // Push-to-deploy webhook (GitHub / Gitea: X-Hub-Signature-256, GitLab: X-Gitlab-Token)
   gitWebhookSecret: env.GIT_WEBHOOK_SECRET || '',
   autoBuildBranch: env.AUTO_BUILD_BRANCH || '',
@@ -73,9 +88,13 @@ export const config = {
   autoBuildLaunch: bool('AUTO_BUILD_LAUNCH', true),
   autoBuildNotifyHermes: bool('AUTO_BUILD_NOTIFY_HERMES', false),
 
-  // Build history
+  // Build history (kept per project)
   logRingLines: int('LOG_RING_LINES', 5000),
   maxBuildHistory: int('MAX_BUILD_HISTORY', 30),
+
+  // AI coding assistant
+  aiCodeMaxTokens: int('AI_CODE_MAX_TOKENS', 8000),
+  aiCodeContextChars: int('AI_CODE_CONTEXT_CHARS', 120_000),
 
   // Auth
   authPassword: env.AUTH_PASSWORD || '',
@@ -95,6 +114,7 @@ export const config = {
 
 config.buildsDir = path.join(config.dataDir, 'builds');
 config.artifactsDir = path.join(config.dataDir, 'artifacts');
+config.projectsDir = path.join(config.dataDir, 'projects');
 config.signingEnabled = () => !!(config.signing.storeFile && config.signing.storePassword && config.signing.keyAlias);
 
 /** Returns a list of fatal configuration problems (empty list = OK). */
@@ -108,8 +128,8 @@ export function configProblems() {
   }
   if (Object.values(sg).some((v) => /[\r\n]/.test(v))) p.push('RELEASE_* values must not contain line breaks');
   if (sg.storeFile && !path.isAbsolute(sg.storeFile)) p.push('RELEASE_KEYSTORE_PATH must be an absolute path');
-  if (!config.projectPath || !path.isAbsolute(config.projectPath)) {
-    p.push('ANDROID_PROJECT_PATH must be set to an absolute path');
-  }
+  if (config.projectPath && !path.isAbsolute(config.projectPath)) p.push('ANDROID_PROJECT_PATH must be an absolute path');
+  if (config.mcpToken && config.mcpToken.length < 16) p.push('MCP_TOKEN must be at least 16 characters long');
+  if (/[\r\n]/.test(config.gitUserName + config.gitUserEmail)) p.push('GIT_USER_NAME / GIT_USER_EMAIL must be single-line');
   return p;
 }

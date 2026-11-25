@@ -29,8 +29,32 @@ function ensurePassword() {
   console.log('='.repeat(72));
 }
 
+/**
+ * Bearer token for agents and scripts (MCP + REST). MCP_TOKEN or API_TOKEN if set, otherwise generated
+ * once into DATA_DIR/agent_token and shown in the dashboard (Settings → Agents).
+ */
+let agentToken = '';
+function ensureAgentToken() {
+  agentToken = config.mcpToken || config.apiToken;
+  if (agentToken) return;
+  const f = path.join(config.dataDir, 'agent_token');
+  try { agentToken = fs.readFileSync(f, 'utf8').trim(); } catch { /* first boot */ }
+  if (agentToken.length < 16) {
+    agentToken = `vdr_${crypto.randomBytes(24).toString('base64url')}`;
+    fs.writeFileSync(f, agentToken + '\n', { mode: 0o600 });
+  }
+}
+export const getAgentToken = () => agentToken;
+export function rotateAgentToken() {
+  if (config.mcpToken || config.apiToken) throw Object.assign(new Error('Token is set by MCP_TOKEN/API_TOKEN; change it there'), { status: 409 });
+  agentToken = `vdr_${crypto.randomBytes(24).toString('base64url')}`;
+  fs.writeFileSync(path.join(config.dataDir, 'agent_token'), agentToken + '\n', { mode: 0o600 });
+  return agentToken;
+}
+
 export function initAuth() {
   ensurePassword();
+  ensureAgentToken();
   if (config.sessionSecret.length >= 16) {
     secret = config.sessionSecret;
     return;
@@ -69,7 +93,11 @@ function validSession(token) {
 
 export function isAuthenticated(req) {
   const bearer = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-  if (bearer && config.apiToken.length >= 16 && safeEq(bearer[1], config.apiToken)) return 'token';
+  if (bearer) {
+    if (agentToken.length >= 16 && safeEq(bearer[1], agentToken)) return 'token';
+    if (config.apiToken.length >= 16 && safeEq(bearer[1], config.apiToken)) return 'token';
+    return false;
+  }
   return validSession(parseCookies(req.headers.cookie)[COOKIE]) ? 'session' : false;
 }
 

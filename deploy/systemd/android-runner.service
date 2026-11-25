@@ -1,5 +1,5 @@
 [Unit]
-Description=Android Remote Build & Device Test Runner
+Description=Vendroid browser Android IDE and build/device runner
 After=network-online.target zerotier-one.service wg-quick@wg0.service
 Wants=network-online.target
 

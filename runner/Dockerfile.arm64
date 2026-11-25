@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Android Remote Runner for linux/arm64 (OCI Ampere). Build context: ./runner
+# Vendroid (browser Android IDE + build/device runner) for linux/arm64 (OCI Ampere). Build context: ./runner
 #
 # The Android SDK is NOT baked in: it is installed on first start into the persistent
 # /opt/android-sdk volume (licenses, platforms, build-tools, aarch64 aapt2), so image rebuilds
@@ -36,7 +36,7 @@ ENV ANDROID_HOME=/opt/android-sdk \
     ADB_BIN=/usr/bin/adb \
     GRADLE_USER_HOME=/root/.gradle \
     DATA_DIR=/data \
-    ANDROID_PROJECT_PATH=/workspace/android-project \
+    WORKSPACES_DIR=/workspace \
     PORT=3080 \
     NODE_ENV=production
 
@@ -44,6 +44,7 @@ WORKDIR /opt/runner
 COPY package.json ./
 COPY src ./src
 COPY public ./public
+COPY templates ./templates
 COPY scripts ./scripts
 RUN chmod +x scripts/*.sh && node --check src/server.js && node --check src/edge.js
 

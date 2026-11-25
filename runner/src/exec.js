@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 const SECRET_ENV = [
   'AUTH_PASSWORD', 'API_TOKEN', 'SESSION_SECRET', 'NINE_ROUTER_API_KEY', 'HERMES_WEBHOOK_SECRET',
   'GIT_WEBHOOK_SECRET', 'RELEASE_KEYSTORE_PASSWORD', 'RELEASE_KEY_PASSWORD',
+  'GIT_TOKEN', 'GITHUB_TOKEN', 'MCP_TOKEN',
 ];
 export function childEnv(extra = {}) {
   const e = { ...process.env, ...extra };

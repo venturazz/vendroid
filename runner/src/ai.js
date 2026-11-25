@@ -116,11 +116,17 @@ export async function notifyHermes(payload) {
   const body = {
     event: payload.event || 'manual_investigation',
     jobId: payload.jobId ?? null,
-    projectPath: config.projectPath,
+    projectId: payload.projectId || null,
+    projectName: payload.projectName || null,
+    projectPath: payload.projectPath || config.projectPath || null,
     packageName: payload.packageName || config.defaultPackage || null,
     deviceSerial: payload.deviceSerial || config.defaultDevice || null,
     errorTail: String(payload.errorTail || '').slice(-MAX_CHARS),
     crashSnippet: String(payload.crashSnippet || '').slice(0, MAX_CHARS),
+    ...(payload.task ? { task: String(payload.task).slice(0, 20_000) } : {}),
+    ...(payload.files ? { files: payload.files.slice(0, 50) } : {}),
+    // Hermes can act on this project through the runner's MCP endpoint (tools: builds, adb, files, git).
+    runner: { mcpPath: '/mcp', restToolsPath: '/api/agent/tools' },
     timestamp: new Date().toISOString(),
   };
   try {

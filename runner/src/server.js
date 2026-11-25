@@ -1,33 +1,39 @@
-// Android Remote Build & Device Test Runner - zero-dependency Node.js (node:http) backend.
+// Vendroid: browser Android IDE + remote build & device runner. Zero-dependency Node.js (node:http).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, configProblems, aapt2Path } from './config.js';
 import { Router, readJson, readRaw, sendJson, serveStatic } from './http.js';
-import { openSse } from './sse.js';
 import * as auth from './auth.js';
-import * as adbm from './adb.js';
-import * as ai from './ai.js';
-import { envHealth } from './health.js';
 import { BuildManager } from './builds.js';
+import { ProjectStore } from './projects.js';
 import { ensureGradleProperties } from './gradleProps.js';
 import { AdbWatchdog } from './watchdog.js';
-import { verifyGitWebhook } from './webhook.js';
-import { HttpError, LEVELS, bad, isBuildId, isLevel, isPackage, isSerial, isTcpTarget } from './validate.js';
+import { createAgentTools } from './agent.js';
+import { HttpError } from './validate.js';
+import * as coreRoutes from './routes/core.js';
+import * as buildRoutes from './routes/builds.js';
+import * as deviceRoutes from './routes/devices.js';
+import * as projectRoutes from './routes/projects.js';
+import * as aiRoutes from './routes/ai.js';
+import * as agentRoutes from './routes/agent.js';
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const trustProxy = ['1', 'true'].includes(String(process.env.TRUST_PROXY || '').toLowerCase());
-const builds = new BuildManager();
+const projects = new ProjectStore();
+const builds = new BuildManager(projects);
 const watchdog = new AdbWatchdog();
+const agentTools = createAgentTools({ projects, builds, watchdog });
 const router = new Router();
 
 const SEC_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'same-origin',
+  // Scripts only from this origin. Inline *styles* are allowed for the code editor's dynamic theming.
   'Content-Security-Policy':
-    "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
 
 // Unix-socket connections only come from the edge relay (behind Traefik), so XFF is trusted there.
@@ -37,218 +43,8 @@ const clientIp = (req) => {
   return ((trustProxy || viaSocket) && xff) || req.socket.remoteAddress || 'unknown';
 };
 
-const str = (v, max, name) => {
-  if (v === undefined || v === null || v === '') return '';
-  if (typeof v !== 'string' || v.length > max) throw bad(`${name} must be a string up to ${max} chars`);
-  return v;
-};
-const serialOf = (v) => {
-  const s = v || config.defaultDevice;
-  if (!isSerial(s)) throw bad('A valid device serial or <ip>:<port> is required');
-  return s;
-};
-const pkgOf = (v) => {
-  const p = v || config.defaultPackage;
-  if (!isPackage(p)) throw bad('A valid package name is required');
-  return p;
-};
-
-// ---------------------------------------------------------------- auth + health
-router.get('/healthz', (req, res) => sendJson(res, 200, { ok: true }), { public: true });
-
-router.post('/api/auth/login', async (req, res, { body }) => {
-  const ip = clientIp(req);
-  if (!auth.loginAllowed(ip)) throw new HttpError(429, 'Too many failed attempts. Try again later.');
-  if (!auth.checkPassword(body.password)) {
-    auth.loginFailed(ip);
-    throw new HttpError(401, 'Invalid password');
-  }
-  auth.loginOk(ip);
-  sendJson(res, 200, { ok: true }, { 'Set-Cookie': auth.cookieHeader(req, auth.makeSession(), config.sessionTtlHours * 3600) });
-}, { public: true });
-
-router.post('/api/auth/logout', (req, res) =>
-  sendJson(res, 200, { ok: true }, { 'Set-Cookie': auth.cookieHeader(req, '', 0) }), { public: true });
-
-router.get('/api/auth/me', (req, res) => sendJson(res, 200, { authenticated: !!auth.isAuthenticated(req) }), { public: true });
-
-router.get('/api/health/env', async (req, res) => sendJson(res, 200, await envHealth()));
-router.get('/api/ai/status', async (req, res) => sendJson(res, 200, await ai.aiStatus()));
-router.get('/api/config', (req, res) => sendJson(res, 200, {
-  defaultPackage: config.defaultPackage, defaultDevice: config.defaultDevice, levels: LEVELS,
-  tasks: ['assembleDebug', 'assembleRelease', 'clean assembleDebug'],
-  releaseSigning: config.signingEnabled(),
-  gitWebhook: { enabled: !!config.gitWebhookSecret, path: '/api/hooks/git', branch: config.autoBuildBranch || null },
-  autoReconnect: watchdog.view(),
-}));
-
-// ---------------------------------------------------------------- builds
-router.post('/api/builds', (req, res, { body }) =>
-  sendJson(res, 202, builds.enqueue(body, { trigger: req.authKind === 'token' ? 'api' : 'manual' })));
-
-// Push-to-deploy: GitHub/Gitea (X-Hub-Signature-256) or GitLab (X-Gitlab-Token). Authenticated by
-// the shared secret, not the session; pulls, builds and (by default) installs + launches.
-router.post('/api/hooks/git', (req, res, { raw }) => {
-  if (!config.gitWebhookSecret) throw new HttpError(404, 'Not found');
-  const hook = verifyGitWebhook(req, raw, config.gitWebhookSecret);
-  if (!hook.ok) throw new HttpError(401, hook.reason);
-  if (hook.ping) return sendJson(res, 200, { ok: true, pong: true });
-  if (!hook.ref || !hook.ref.startsWith('refs/heads/')) return sendJson(res, 202, { ok: true, ignored: 'not a branch push' });
-  const branch = hook.ref.slice('refs/heads/'.length);
-  if (config.autoBuildBranch && branch !== config.autoBuildBranch) {
-    return sendJson(res, 202, { ok: true, ignored: `branch ${branch} != ${config.autoBuildBranch}` });
-  }
-  if (hook.deleted) return sendJson(res, 202, { ok: true, ignored: 'branch deleted' });
-  if (builds.hasQueued('webhook')) return sendJson(res, 202, { ok: true, coalesced: true });
-  const wantDevice = !!config.defaultDevice;
-  const b = builds.enqueue({
-    task: config.autoBuildTask,
-    gitPullBeforeBuild: true,
-    autoInstallAfterBuild: wantDevice && config.autoBuildInstall,
-    autoLaunchAfterInstall: wantDevice && config.autoBuildInstall && config.autoBuildLaunch && !!config.defaultPackage,
-    autoNotifyHermes: config.autoBuildNotifyHermes,
-  }, { trigger: 'webhook', ref: branch });
-  sendJson(res, 202, { ok: true, buildId: b.id });
-}, { public: true, raw: true });
-router.get('/api/builds', (req, res) => sendJson(res, 200, { active: builds.activeId(), builds: builds.list() }));
-router.get('/api/builds/:id', (req, res, { params }) => sendJson(res, 200, builds.view(builds.get(params.id))));
-router.post('/api/builds/:id/cancel', (req, res, { params }) => sendJson(res, 200, builds.cancel(params.id)));
-
-router.get('/api/builds/:id/apk', (req, res, { params }) => {
-  const b = builds.get(params.id);
-  const file = builds.apkPath(b);
-  if (!file) throw new HttpError(404, 'No APK artifact for this build');
-  const st = fs.statSync(file);
-  res.writeHead(200, {
-    'Content-Type': 'application/vnd.android.package-archive',
-    'Content-Length': st.size,
-    'Content-Disposition': `attachment; filename="${b.id}-${path.basename(file).replace(/[^A-Za-z0-9._-]/g, '_')}"`,
-  });
-  fs.createReadStream(file).pipe(res);
-});
-
-router.get('/api/builds/:id/log', (req, res, { params }) => {
-  const b = builds.get(params.id);
-  const file = path.join(config.buildsDir, `${b.id}.log`);
-  if (!fs.existsSync(file)) throw new HttpError(404, 'No log for this build');
-  res.writeHead(200, {
-    'Content-Type': 'text/plain; charset=utf-8',
-    'Content-Disposition': `attachment; filename="${b.id}.log"`,
-  });
-  fs.createReadStream(file).pipe(res);
-});
-
-router.get('/api/builds/:id/stream', (req, res, { params, url }) => {
-  builds.get(params.id);
-  const last = Number(req.headers['last-event-id'] || url.searchParams.get('after') || 0) || 0;
-  const sse = openSse(req, res);
-  const batchState = { v: null };
-  const unsub = builds.subscribe(params.id, last, {
-    onLine: (e) => sse.send('line', e.text, e.n),
-    onState: (s) => {
-      sse.send('state', s);
-      batchState.v = s;
-      if (['succeeded', 'failed', 'cancelled'].includes(s.state)) setImmediate(() => { sse.send('end', s); sse.end(); });
-    },
-  });
-  sse.onClose(unsub);
-});
-
-// ---------------------------------------------------------------- devices
-router.get('/api/devices', async (req, res) => {
-  try {
-    sendJson(res, 200, { devices: await adbm.listDevices(), watchdog: watchdog.view() });
-  } catch (e) {
-    throw new HttpError(502, e.message);
-  }
-});
-router.post('/api/devices/connect', async (req, res, { body }) => {
-  if (!isTcpTarget(body.target)) throw bad('target must be <ipv4>:<port>');
-  watchdog.noteManual('connect', body.target);
-  sendJson(res, 200, await adbm.connect(body.target));
-});
-router.post('/api/devices/disconnect', async (req, res, { body }) => {
-  if (!isTcpTarget(body.target)) throw bad('target must be <ipv4>:<port>');
-  watchdog.noteManual('disconnect', body.target);
-  sendJson(res, 200, await adbm.disconnect(body.target));
-});
-router.post('/api/adb/restart', async (req, res, { body }) => {
-  const serial = body.serial || config.defaultDevice;
-  if (body.mode === 'reconnect') watchdog.noteManual('connect', serial);
-  sendJson(res, 200, await adbm.restartHelper(body.mode, serial));
-});
-router.post('/api/devices/action', async (req, res, { body }) => {
-  const serial = serialOf(body.serial);
-  const action = body.action;
-  if (action === 'install') {
-    const b = body.buildId ? builds.get(body.buildId) : builds.latestApk();
-    const apk = b && builds.apkPath(b);
-    if (!apk) throw new HttpError(404, 'No built APK available to install');
-    const r = await adbm.installApk(serial, apk);
-    return sendJson(res, 200, { ...r, buildId: b.id });
-  }
-  if (!['launch', 'stop', 'clear'].includes(action)) throw bad('action must be install, launch, stop or clear');
-  sendJson(res, 200, await adbm.deviceAction(action, serial, pkgOf(body.packageName)));
-});
-router.get('/api/devices/screenshot', async (req, res, { url }) => {
-  const png = await adbm.screenshot(serialOf(url.searchParams.get('serial')));
-  res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Cache-Control': 'no-store' });
-  res.end(png);
-});
-
-// ---------------------------------------------------------------- logcat
-router.get('/api/logcat/stream', async (req, res, { url }) => {
-  const q = url.searchParams;
-  const serial = serialOf(q.get('serial'));
-  const level = q.get('level') || 'V';
-  if (!isLevel(level)) throw bad('level must be one of V, D, I, W, E');
-  const tag = str(q.get('tag') || '', 100, 'tag');
-  const text = str(q.get('q') || '', 200, 'q');
-  const packageName = q.get('package') ? pkgOf(q.get('package')) : '';
-  const sse = openSse(req, res);
-  let handle;
-  try {
-    handle = await adbm.startLogcat(
-      { serial, minLevel: level, tag, q: text, packageName },
-      (lines) => sse.send('lines', lines),
-      (err) => { if (err) sse.send('error', { message: err }); sse.send('end', {}); sse.end(); },
-    );
-  } catch (e) {
-    sse.send('error', { message: e.message });
-    return sse.end();
-  }
-  sse.send('ready', { serial, pid: handle.pid || null });
-  sse.onClose(() => handle.stop());
-});
-router.post('/api/logcat/clear', async (req, res, { body }) => sendJson(res, 200, await adbm.clearLogcat(serialOf(body.serial))));
-
-// ---------------------------------------------------------------- AI
-const wrapAi = async (fn) => {
-  try { return await fn(); } catch (e) { throw e.status ? new HttpError(e.status, e.message) : e; }
-};
-router.post('/api/ai/analyze', async (req, res, { body }) => {
-  let text = '';
-  if (body.jobId) text = builds.tail(String(body.jobId), 800);
-  else text = str(body.text, 400_000, 'text');
-  sendJson(res, 200, await wrapAi(() => ai.analyze({ mode: body.mode, text })));
-});
-router.post('/api/ai/hermes-investigate', async (req, res, { body }) => {
-  let errorTail = str(body.errorTail, 100_000, 'errorTail');
-  if (body.jobId) {
-    if (!isBuildId(body.jobId)) throw bad('Invalid jobId');
-    if (!errorTail) errorTail = ai.sliceBuildError(builds.tail(body.jobId, 400));
-  }
-  const crashSnippet = body.crashSnippet ? ai.sliceCrash(str(body.crashSnippet, 400_000, 'crashSnippet')) : '';
-  if (!errorTail && !crashSnippet) throw bad('Nothing to investigate: provide jobId, errorTail or crashSnippet');
-  const r = await ai.notifyHermes({
-    event: crashSnippet && !errorTail ? 'logcat_crash' : 'manual_investigation',
-    jobId: body.jobId || null,
-    packageName: body.packageName ? pkgOf(body.packageName) : '',
-    deviceSerial: body.deviceSerial ? serialOf(body.deviceSerial) : '',
-    errorTail, crashSnippet,
-  });
-  sendJson(res, r.ok ? 200 : 502, r);
-});
+const ctx = { builds, projects, watchdog, agentTools, clientIp };
+for (const mod of [coreRoutes, buildRoutes, deviceRoutes, projectRoutes, aiRoutes, agentRoutes]) mod.register(router, ctx);
 
 // ---------------------------------------------------------------- static UI
 const serveIndex = (req, res) => {
@@ -260,6 +56,10 @@ router.get('/login.js', (req, res) => serveStatic(res, PUBLIC, 'login.js') || se
 router.get('/login.css', (req, res) => serveStatic(res, PUBLIC, 'login.css') || sendJson(res, 404, { error: 'Not found' }), { public: true });
 router.get('/assets/:file', (req, res, { params }) =>
   serveStatic(res, path.join(PUBLIC, 'app'), params.file) || sendJson(res, 404, { error: 'Not found' }));
+router.get('/assets/js/:file', (req, res, { params }) =>
+  serveStatic(res, path.join(PUBLIC, 'app', 'js'), params.file) || sendJson(res, 404, { error: 'Not found' }));
+router.get('/vendor/:file', (req, res, { params }) =>
+  serveStatic(res, path.join(PUBLIC, 'vendor'), params.file) || sendJson(res, 404, { error: 'Not found' }));
 
 // ---------------------------------------------------------------- dispatcher
 async function handle(req, res) {
@@ -268,23 +68,32 @@ async function handle(req, res) {
   try {
     const m = router.match(req.method === 'HEAD' ? 'GET' : req.method, url.pathname);
     if (!m) throw new HttpError(404, 'Not found');
-    if (!m.route.opts.public) {
-      req.authKind = auth.isAuthenticated(req);
-      if (!req.authKind) throw new HttpError(401, 'Authentication required');
-    }
+    req.authKind = auth.isAuthenticated(req);
+    if (!m.route.opts.public && !req.authKind) throw new HttpError(401, 'Authentication required');
     if (req.method !== 'GET' && req.method !== 'HEAD' && !auth.sameOrigin(req)) throw new HttpError(403, 'Cross-origin request blocked');
     if (m.route.opts.raw) {
       const raw = await readRaw(req, 5 * 1024 * 1024);
       await m.route.handler(req, res, { params: m.params, raw, url });
     } else {
-      const body = await readJson(req);
+      const body = await readJson(req, 8 * 1024 * 1024, { allowArray: !!m.route.opts.jsonAny });
       await m.route.handler(req, res, { params: m.params, body, url });
     }
   } catch (e) {
-    const status = e instanceof HttpError ? e.status : 500;
+    const status = e instanceof HttpError ? e.status : e.status && Number.isInteger(e.status) ? e.status : 500;
     if (status === 500) console.error(`[error] ${req.method} ${url.pathname}:`, e);
     if (res.headersSent) return res.end();
-    sendJson(res, status, { error: status === 500 ? 'Internal server error' : e.message });
+    sendJson(res, status, { error: status === 500 ? 'Internal server error' : e.message, ...(e.body || {}) });
+  }
+}
+
+/** v1 → v2: if ANDROID_PROJECT_PATH lives outside WORKSPACES_DIR, link it in so it shows up as a project. */
+function adoptLegacyProject() {
+  if (!config.projectPath || !fs.existsSync(config.projectPath)) return;
+  const p = path.resolve(config.projectPath);
+  if (path.dirname(p) === config.workspacesDir) return;
+  const link = path.join(config.workspacesDir, path.basename(p));
+  if (!fs.existsSync(link)) {
+    try { fs.symlinkSync(p, link, 'dir'); console.log(`linked legacy project ${p} -> ${link}`); } catch (e) { console.warn(`could not link legacy project: ${e.message}`); }
   }
 }
 
@@ -296,6 +105,8 @@ export function start() {
   }
   fs.mkdirSync(config.dataDir, { recursive: true });
   auth.initAuth();
+  projects.init();
+  adoptLegacyProject();
   builds.init();
   const gp = ensureGradleProperties();
   watchdog.start();
@@ -324,10 +135,11 @@ export function start() {
   const server = mk();
   servers.push(server);
   server.listen(config.port, config.host, () => {
-    console.log(`android-remote-runner listening on http://${config.host}:${config.port}`);
-    console.log(`project=${config.projectPath} data=${config.dataDir}${gp ? ` gradle.properties=${gp}` : ''}`);
+    console.log(`vendroid listening on http://${config.host}:${config.port}`);
+    console.log(`workspaces=${config.workspacesDir} projects=${projects.list().length} data=${config.dataDir}${gp ? ` gradle.properties=${gp}` : ''}`);
     console.log(`aapt2=${aapt2Path() || '(SDK default / pending bootstrap)'} adb=${config.adbBin} release-signing=${config.signingEnabled() ? 'on' : 'off'}`
-      + ` auto-reconnect=${watchdog.enabled ? watchdog.target : 'off'} git-webhook=${config.gitWebhookSecret ? 'on' : 'off'}`);
+      + ` auto-reconnect=${watchdog.enabled ? watchdog.target : 'off'} git-webhook=${config.gitWebhookSecret ? 'on' : 'off'}`
+      + ` git-token=${config.gitToken ? 'set' : 'none'} mcp=/mcp`);
   });
   const shutdown = () => {
     watchdog.stop();

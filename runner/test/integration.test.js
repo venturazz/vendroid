@@ -78,6 +78,7 @@ test.before(async () => {
     LISTEN_SOCKET: path.join(dirs.tmp, 'run', 'runner.sock'),
     AUTH_PASSWORD: PASSWORD,
     ANDROID_PROJECT_PATH: dirs.proj,
+    WORKSPACES_DIR: path.join(dirs.tmp, "ws"),
     ANDROID_HOME: path.join(dirs.tmp, 'sdk'),
     DATA_DIR: path.join(dirs.tmp, 'data'),
     GRADLE_USER_HOME: path.join(dirs.tmp, 'gradle'),
@@ -151,7 +152,7 @@ test('auth: everything but login is protected', async () => {
   assert.match(sc, /HttpOnly/);
   assert.match(sc, /SameSite=Strict/);
   ctx.cookie = sc.split(';')[0];
-  assert.match((await api('/')).data, /Build &amp; Deploy/);
+  assert.match((await api("/")).data, /Project Hub/);
 });
 
 test('security: injection, traversal and cross-origin requests are rejected', async () => {

@@ -1,7 +1,7 @@
-// Browser smoke test of the real dashboard (CI only: needs `playwright` + Chromium).
-// Starts the server with the fake adb/gradlew fixtures, then drives the UI like a user and fails on
-// any console error, CSP violation or uncaught exception. Screenshots go to $UI_OUT.
-import { spawn, execFileSync } from 'node:child_process';
+// Browser smoke test of the IDE (CI only: needs `playwright` + Chromium). Drives the real UI like a
+// user: hub → new project → explorer/editor → save → git commit → AI edit → run on phone → logcat →
+// device screenshot. Fails on any console error / uncaught exception. Screenshots go to $UI_OUT.
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -13,36 +13,46 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, '..', 'fixtures');
 const OUT = process.env.UI_OUT || path.join(os.tmpdir(), 'ui-shots');
 const PASSWORD = 'ui-smoke-password';
-const DEVICE = '10.147.17.5:5555';
 fs.mkdirSync(OUT, { recursive: true });
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-ui-'));
-const proj = path.join(tmp, 'project');
-const state = path.join(tmp, 'adb');
-fs.mkdirSync(proj); fs.mkdirSync(state); fs.mkdirSync(path.join(tmp, 'bin'));
-fs.copyFileSync(path.join(FIX, 'fake-gradlew.sh'), path.join(proj, 'gradlew'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vendroid-ui-'));
+const ws = path.join(tmp, 'ws');
+fs.mkdirSync(path.join(tmp, 'bin'), { recursive: true });
+fs.mkdirSync(path.join(tmp, 'adb'));
 fs.copyFileSync(path.join(FIX, 'fake-adb.sh'), path.join(tmp, 'bin', 'adb'));
-fs.chmodSync(path.join(proj, 'gradlew'), 0o755);
 fs.chmodSync(path.join(tmp, 'bin', 'adb'), 0o755);
-execFileSync('git', ['init', '-q'], { cwd: proj });
 
-const ai = http.createServer((req, res) => {
+// Fake 9Router: streams an answer with one edit to MainActivity.kt
+const EDIT = [
+  'Here is a friendlier greeting.',
+  '',
+  'app/src/main/java/dev/ui/test/MainActivity.kt',
+  '<<<<<<< SEARCH',
+  '        Text(text = "Tapped $count times")',
+  '=======',
+  '        Text(text = "You tapped $count times")',
+  '>>>>>>> REPLACE',
+].join('\n');
+const nr = http.createServer((req, res) => {
   req.resume();
   req.on('end', () => {
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ choices: [{ message: { content: '{"rootCause":"`foo` is not declared in Main.kt","affected":["app/src/main/java/Main.kt:3"],"fixSteps":["Declare foo or import it","Rebuild"],"confidence":"high"}' } }] }));
+    const body = req.url.includes('chat') ? null : null;
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    for (let i = 0; i < EDIT.length; i += 9) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: EDIT.slice(i, i + 9) } }] })}\n\n`);
+    res.end('data: [DONE]\n\n');
+    void body;
   });
 }).listen(0, '127.0.0.1');
-await new Promise((r) => ai.once('listening', r));
+await new Promise((r) => nr.once('listening', r));
 
 const port = 31000 + Math.floor(Math.random() * 5000);
 const server = spawn(process.execPath, [path.join(HERE, '..', '..', 'src', 'server.js')], {
   env: {
     PATH: process.env.PATH, HOME: tmp, PORT: String(port), HOST: '127.0.0.1', AUTH_PASSWORD: PASSWORD,
-    ANDROID_PROJECT_PATH: proj, ANDROID_HOME: path.join(tmp, 'sdk'), DATA_DIR: path.join(tmp, 'data'),
-    GRADLE_USER_HOME: path.join(tmp, 'gradle'), ADB_BIN: path.join(tmp, 'bin', 'adb'), FAKE_STATE: state,
-    AAPT2_BINARY: '/bin/true', DEFAULT_PACKAGE_NAME: 'com.example.app', DEFAULT_DEVICE_ADDRESS: DEVICE,
-    NINE_ROUTER_URL: `http://127.0.0.1:${ai.address().port}/v1`,
+    WORKSPACES_DIR: ws, ANDROID_HOME: path.join(tmp, 'sdk'), DATA_DIR: path.join(tmp, 'data'),
+    GRADLE_USER_HOME: path.join(tmp, 'gradle'), ADB_BIN: path.join(tmp, 'bin', 'adb'), FAKE_STATE: path.join(tmp, 'adb'),
+    AAPT2_BINARY: '/bin/true', DEFAULT_DEVICE_ADDRESS: '10.147.17.5:5555',
+    NINE_ROUTER_URL: `http://127.0.0.1:${nr.address().port}/v1`, GIT_USER_NAME: 'UI Test', GIT_USER_EMAIL: 'ui@test',
   },
   stdio: 'inherit',
 });
@@ -54,95 +64,138 @@ for (let i = 0; i < 100; i++) {
 
 const problems = [];
 const browser = await chromium.launch();
-const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' })).newPage();
+const page = await (await browser.newContext({ viewport: { width: 1600, height: 960 }, colorScheme: 'dark' })).newPage();
 page.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
 page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
-const shot = (name) => page.screenshot({ path: path.join(OUT, `${name}.png`) });
+let n = 0;
+const shot = (name) => page.screenshot({ path: path.join(OUT, `${String(++n).padStart(2, '0')}-${name}.png`) });
 const step = (s) => console.log(`[ui] ${s}`);
+const projDir = () => path.join(ws, 'ui-test-app');
 
 try {
-  step('login page');
+  step('login');
   await page.goto(base);
-  await shot('01-login');
-  await page.fill('#pw', 'wrong-password');
-  await page.click('button[type=submit]');
-  await page.waitForSelector('#err:has-text("Invalid password")');
-  problems.splice(0); // the 401 above is expected
   await page.fill('#pw', PASSWORD);
   await page.click('button[type=submit]');
-  await page.waitForSelector('#btnBuild');
+  await page.waitForSelector('#hub:not([hidden])');
+  await page.waitForSelector('#hubEmpty:not([hidden])');
+  await shot('hub-empty');
 
-  step('device auto-connects, badges render');
-  await page.waitForSelector('#devBadge.ok', { timeout: 20000 });
-  await page.waitForSelector('#aiBadge:not(:has-text("…"))');
-  await shot('02-dashboard-empty');
+  step('new project dialog (Compose template)');
+  await page.click('#hubNew');
+  await page.fill('#npName', 'UI Test App');
+  await page.fill('#npPkg', 'dev.ui.test');
+  await shot('new-project-dialog');
+  await page.click('#npCreate');
+  await page.waitForSelector('#ide:not([hidden])', { timeout: 20000 });
+  await page.waitForSelector('#tree .node[data-path="app"]');
+  // Fake Gradle for this project so Run works without downloading Gradle
+  fs.copyFileSync(path.join(FIX, 'fake-gradlew.sh'), path.join(projDir(), 'gradlew'));
 
-  step('environment dialog');
-  await page.click('#envBadge');
-  await page.waitForSelector('#envDlg[open] #envTable tr');
-  await shot('03-env-dialog');
-  await page.click('#envDlg button');
+  step('open MainActivity via quick open, CodeMirror loads with Kotlin');
+  await page.keyboard.press('Control+p');
+  await page.fill('#quickInput', 'MainActivity');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.tab.active:has-text("MainActivity.kt")');
+  await page.waitForSelector('.cm-editor .cm-content');
+  if ((await page.textContent('#sbLang')) !== 'Kotlin') problems.push(`language: ${await page.textContent('#sbLang')}`);
+  await page.waitForSelector('#tree .node[data-path="app/src/main/java/dev/ui/test/MainActivity.kt"]');
+  await shot('editor-kotlin');
 
-  step('build & deploy via Ctrl+Enter, logcat follows the launch');
-  await page.keyboard.press('Control+Enter');
-  await page.waitForSelector('#tab-logcat:not([hidden])', { timeout: 20000 });
-  await page.waitForSelector('#lcLog div', { timeout: 10000 });
-  await page.waitForFunction(() => document.querySelector('#toast')?.textContent.includes('Crash detected')
-    || document.querySelector('#lcLog').textContent.includes('FATAL EXCEPTION'));
-  await shot('05-logcat-followed');
+  step('edit + save (Ctrl+S) -> git shows modified');
+  await page.click('.cm-content');
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\n// edited in the browser\n');
+  await page.waitForSelector('.tab.active.dirty');
+  await page.keyboard.press('Control+s');
+  await page.waitForSelector('.tab.active:not(.dirty)');
+  if (!fs.readFileSync(path.join(projDir(), 'app/src/main/java/dev/ui/test/MainActivity.kt'), 'utf8').includes('// edited in the browser')) problems.push('save did not reach disk');
 
-  step('triage crash with 9Router');
-  await page.click('#lcTriage');
-  await page.waitForSelector('#lcAi:has-text("Root cause")');
-  await shot('06-logcat-triage');
+  step('open XML + Gradle files (highlighting)');
+  await page.click('#tree .node[data-path="app"]').catch(() => {});
+  await page.keyboard.press('Control+p');
+  await page.fill('#quickInput', 'strings.xml');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.tab.active:has-text("strings.xml")');
+  if ((await page.textContent('#sbLang')) !== 'XML') problems.push('xml language');
+  await page.keyboard.press('Control+p');
+  await page.fill('#quickInput', 'app/build.gradle.kts');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.tab.active:has-text("build.gradle.kts")');
+  await shot('editor-gradle');
 
-  step('console shows succeeded build with commit-less history item and APK link');
-  await page.click('[data-tab=console]');
+  step('source control: diff + commit');
+  await page.click('.activitybar [data-view=git]');
+  await page.waitForSelector('.gf:has-text("MainActivity.kt")');
+  await page.click('.gf:has-text("MainActivity.kt")');
+  await page.waitForSelector('.tab.active:has-text("Δ MainActivity.kt")');
+  await page.waitForSelector('.diffview .d-add');
+  await shot('git-diff');
+  await page.fill('#gitMsg', 'Edit from the browser');
+  await page.click('#gitBody button.primary');
+  await page.waitForSelector('#gitLog div:has-text("Edit from the browser")');
+  await shot('git-committed');
+
+  step('AI panel: stream, proposal, apply');
+  await page.click('.activitybar [data-view=explorer]');
+  await page.keyboard.press('Control+p');
+  await page.fill('#quickInput', 'MainActivity');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Control+i');
+  await page.waitForSelector('#aipanel:not([hidden])');
+  await page.waitForSelector('#aiCtx .ctxchip:has-text("MainActivity.kt")');
+  await page.fill('#aiInput', 'Make the counter text friendlier');
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.proposal .pfh:has-text("MainActivity.kt")', { timeout: 15000 });
+  await shot('ai-proposal');
+  await page.click('.proposal button:has-text("Apply all")');
+  await page.waitForSelector('.proposal button:has-text("Undo"):not([hidden])');
+  await page.waitForFunction(() => document.querySelector('.cm-content')?.textContent.includes('You tapped'));
+  await shot('ai-applied');
+
+  step('run: build, install, launch, logcat follows');
+  await page.click('#quickConnect');
+  await page.waitForSelector('#devBadge.ok', { timeout: 15000 });
+  await page.click('#btnRun');
+  await page.waitForSelector('#bState.succeeded, [data-bpane=logcat]:not([hidden])', { timeout: 30000 });
+  await page.waitForSelector('[data-bpane=logcat]:not([hidden]) #lcLog div', { timeout: 20000 });
+  await shot('run-logcat');
+  await page.click('.bottom-tabs [data-btab=build]');
   await page.waitForSelector('#bState.succeeded');
-  await page.waitForSelector('#history li a.btn:has-text("APK")');
-  await shot('04-console-succeeded');
+  await page.waitForSelector('#bLog div:has-text("Events injected")');
+  await shot('build-output');
 
-  step('failed build, analyze error');
-  fs.writeFileSync(path.join(proj, 'FAIL'), '');
-  await page.click('#btnBuild');
-  await page.waitForSelector('#bState.failed', { timeout: 20000 });
-  await page.click('#btnAnalyze');
-  await page.waitForSelector('#aiOut:has-text("Fix steps")');
-  await shot('07-console-failed-analyzed');
-  fs.rmSync(path.join(proj, 'FAIL'));
-
-  step('screen tab: capture + actions');
-  await page.click('[data-tab=screen]');
+  step('device screenshot');
+  await page.click('.bottom-tabs [data-btab=device]');
   await page.click('#scCapture');
   await page.waitForSelector('#scSave:not([hidden])');
-  await page.click('#scLaunch');
-  await page.waitForSelector('#toast:has-text("Launch")');
-  await shot('08-screen-actions');
+  await shot('device');
 
-  step('settings persist across reload');
-  await page.click('[data-tab=console]');
-  await page.selectOption('#task', 'clean assembleDebug');
-  await page.uncheck('#oLaunch');
-  await page.reload();
-  await page.waitForSelector('#btnBuild');
-  const task = await page.inputValue('#task');
-  const launch = await page.isChecked('#oLaunch');
-  if (task !== 'clean assembleDebug' || launch) problems.push(`settings not persisted (task=${task}, launch=${launch})`);
+  step('settings / agents');
+  await page.click('#btnMore');
+  await page.click('#moreMenu [data-act=settings]');
+  await page.waitForSelector('#mcpLocal:has-text("/mcp")');
+  await shot('settings-agents');
+  await page.click('#settingsClose');
 
-  step('mobile layout');
-  await page.setViewportSize({ width: 390, height: 844 });
-  await shot('09-mobile');
+  step('back to hub shows the project card');
+  await page.click('.brand');
+  await page.waitForSelector('.pcard:has-text("UI Test App")');
+  await page.waitForSelector('.pcard .pill.succeeded');
+  await shot('hub-with-project');
 
-  step('logout');
-  await page.click('#logout');
-  await page.waitForSelector('#pw');
+  step('narrow layout');
+  await page.goto(`${base}/#/p/ui-test-app`);
+  await page.waitForSelector('#ide:not([hidden])');
+  await page.setViewportSize({ width: 820, height: 900 });
+  await shot('narrow');
 } catch (e) {
-  problems.push(`flow: ${e.message}`);
-  await shot('99-failure').catch(() => {});
+  problems.push(`flow: ${e.message.split('\n')[0]}`);
+  await shot('failure').catch(() => {});
 } finally {
   await browser.close();
   server.kill('SIGTERM');
-  ai.close();
+  nr.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

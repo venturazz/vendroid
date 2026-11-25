@@ -1,4 +1,4 @@
-# Android Remote Runner: Docker Compose / Coolify (OCI Ampere linux/arm64).
+# Vendroid (browser Android IDE + build/device runner): Docker Compose / Coolify (OCI Ampere linux/arm64).
 #
 #   runner  network_mode: host. Reaches the phone through the host's ZeroTier/WireGuard
 #           interface and the loopback-only 9Router (127.0.0.1:20128) / Hermes (127.0.0.1:8644).
@@ -37,19 +37,26 @@ services:
       API_TOKEN: ${API_TOKEN:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
-      APP_MODULE: ${APP_MODULE:-app}
+      WORKSPACES_DIR: /workspace
+      ANDROID_PROJECT_PATH: ${ANDROID_PROJECT_PATH:-/workspace/android-project}
       DEFAULT_PACKAGE_NAME: ${DEFAULT_PACKAGE_NAME:-}
       DEFAULT_DEVICE_ADDRESS: ${DEFAULT_DEVICE_ADDRESS:-}
       ADB_AUTO_RECONNECT: ${ADB_AUTO_RECONNECT:-true}
       PROJECT_GIT_URL: ${PROJECT_GIT_URL:-}
       PROJECT_GIT_BRANCH: ${PROJECT_GIT_BRANCH:-main}
+      GIT_TOKEN: ${GIT_TOKEN:-}
+      GIT_USER_NAME: ${GIT_USER_NAME:-Vendroid}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-vendroid@localhost}
+      MCP_TOKEN: ${MCP_TOKEN:-}
+      MCP_ALLOW_WRITE: ${MCP_ALLOW_WRITE:-true}
+      AI_CODE_MAX_TOKENS: ${AI_CODE_MAX_TOKENS:-8000}
       GIT_WEBHOOK_SECRET: ${GIT_WEBHOOK_SECRET:-}
       AUTO_BUILD_BRANCH: ${AUTO_BUILD_BRANCH:-}
       AUTO_BUILD_TASK: ${AUTO_BUILD_TASK:-assembleDebug}
       AUTO_BUILD_INSTALL: ${AUTO_BUILD_INSTALL:-true}
       AUTO_BUILD_LAUNCH: ${AUTO_BUILD_LAUNCH:-true}
       AUTO_BUILD_NOTIFY_HERMES: ${AUTO_BUILD_NOTIFY_HERMES:-false}
-      SDK_PACKAGES: ${SDK_PACKAGES:-platforms;android-35 build-tools;35.0.0}
+      SDK_PACKAGES: ${SDK_PACKAGES:-platforms;android-36 build-tools;36.0.0}
       SDK_AUTO_INSTALL: ${SDK_AUTO_INSTALL:-true}
       AAPT2_MODE: ${AAPT2_MODE:-auto}
       AAPT2_BINARY: ${AAPT2_BINARY:-}
@@ -73,7 +80,7 @@ services:
       - gradle-home:/root/.gradle      # dependency + build cache
       - android-keys:/root/.android    # ADB RSA keys: the phone stays authorized across redeploys
       - runner-data:/data              # history, logs, APKs, generated password, session secret
-      - project:/workspace             # Android project checkout (/workspace/android-project)
+      - project:/workspace             # WORKSPACES_DIR: one folder per project (Project Hub)
       - runner-sock:/run/runner        # Unix socket shared with `edge`
 
   edge:

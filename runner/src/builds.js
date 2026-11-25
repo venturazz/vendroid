@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config, aapt2Path, bootstrapState } from './config.js';
 import { ensureGradleProperties } from './gradleProps.js';
 import { apkProblem } from './apkcheck.js';
@@ -12,13 +13,16 @@ import { notifyHermes, sliceBuildError } from './ai.js';
 import { HttpError, TASKS, bad, isBuildId, isPackage, isSerial, isTask } from './validate.js';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
+const ASKPASS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'git-askpass.sh');
 const KEEP_BUFFERS = 5;
 
 class Cancelled extends Error {}
 
 
 export class BuildManager {
-  constructor() {
+  /** @param {import('./projects.js').ProjectStore} projects */
+  constructor(projects) {
+    this.projects = projects;
     this.builds = new Map(); // id -> record
     this.queue = []; // ids
     this.current = null; // { id, ctx }
@@ -34,6 +38,7 @@ export class BuildManager {
       try {
         const b = JSON.parse(fs.readFileSync(path.join(config.buildsDir, f), 'utf8'));
         if (!isBuildId(b.id)) continue;
+        if (!b.projectId) b.projectId = this.projects?.legacyId() || null; // v1 single-project builds
         if (!TERMINAL.has(b.state)) {
           b.state = 'failed';
           b.error = 'Interrupted by runner restart';
@@ -49,8 +54,14 @@ export class BuildManager {
     const { apkFile, ...rest } = b;
     return { ...rest, apk: apkFile ? { name: path.basename(apkFile), size: b.apkSize } : null };
   }
-  list() {
-    return [...this.builds.values()].sort((a, c) => c.createdAt.localeCompare(a.createdAt)).map((b) => this.view(b));
+  list(projectId) {
+    return [...this.builds.values()]
+      .filter((b) => !projectId || b.projectId === projectId)
+      .sort((a, c) => c.createdAt.localeCompare(a.createdAt)).map((b) => this.view(b));
+  }
+  /** Id of the running build and the queue, for the "busy" indicator across projects. */
+  queueView() {
+    return { active: this.current?.id || null, activeProject: this.current ? this.builds.get(this.current.id)?.projectId : null, queued: [...this.queue] };
   }
   get(id) {
     if (!isBuildId(id)) throw bad('Invalid build id');
@@ -61,9 +72,9 @@ export class BuildManager {
   activeId() { return this.current?.id || null; }
 
   /** Most recent succeeded build that produced an APK (optionally for a variant). */
-  latestApk() {
+  latestApk(projectId) {
     return [...this.builds.values()]
-      .filter((b) => b.state === 'succeeded' && b.apkFile)
+      .filter((b) => b.state === 'succeeded' && b.apkFile && (!projectId || b.projectId === projectId))
       .sort((a, c) => c.createdAt.localeCompare(a.createdAt))[0] || null;
   }
   apkPath(b) {
@@ -73,11 +84,12 @@ export class BuildManager {
   }
 
   /** True if a build triggered by `trigger` is still waiting in the queue (push coalescing). */
-  hasQueued(trigger) {
-    return this.queue.some((id) => this.builds.get(id)?.trigger === trigger);
+  hasQueued(trigger, projectId) {
+    return this.queue.some((id) => this.builds.get(id)?.trigger === trigger && this.builds.get(id)?.projectId === projectId);
   }
 
-  enqueue(body, { trigger = 'manual', ref = null } = {}) {
+  enqueue(projectId, body, { trigger = 'manual', ref = null } = {}) {
+    const project = this.projects.get(projectId);
     if (!isTask(body.task)) throw bad(`task must be one of: ${Object.keys(TASKS).join(', ')}`);
     const flag = (k) => {
       if (body[k] === undefined) return false;
@@ -91,7 +103,7 @@ export class BuildManager {
       autoNotifyHermes: flag('autoNotifyHermes'),
     };
     const deviceSerial = body.deviceSerial || config.defaultDevice || '';
-    const packageName = body.packageName || config.defaultPackage || '';
+    const packageName = body.packageName || project.packageName || '';
     if (deviceSerial && !isSerial(deviceSerial)) throw bad('Invalid deviceSerial');
     if (packageName && !isPackage(packageName)) throw bad('Invalid packageName');
     if ((options.autoInstallAfterBuild || options.autoLaunchAfterInstall) && !deviceSerial) {
@@ -105,7 +117,7 @@ export class BuildManager {
 
     const id = `b${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
     const b = {
-      id, task: body.task, options, deviceSerial, packageName, trigger, ref, commit: null,
+      id, projectId: project.id, projectName: project.name, task: body.task, options, deviceSerial, packageName, trigger, ref, commit: null,
       signed: TASKS[body.task].variant === 'release' ? config.signingEnabled() : null,
       state: 'queued', createdAt: new Date().toISOString(),
       startedAt: null, finishedAt: null, exitCode: null, error: null,
@@ -231,21 +243,32 @@ export class BuildManager {
       ANDROID_SDK_ROOT: config.androidHome,
       GRADLE_USER_HOME: config.gradleUserHome,
     });
+    let project;
+    try {
+      project = this.projects.get(b.projectId);
+    } catch {
+      this.current = null;
+      return this.#finish(b, 'failed', `Project ${b.projectId} no longer exists`);
+    }
+    const root = project.path;
     try {
       await this.#waitForSdk(b, ctx);
       check();
       ensureGradleProperties(); // picks up the aapt2 path recorded by the SDK bootstrap
-      if (!fs.existsSync(path.join(config.projectPath, 'gradlew'))) {
-        throw new Error(`gradlew not found in ${config.projectPath}`);
+      if (!fs.existsSync(path.join(root, 'gradlew'))) {
+        throw new Error(`gradlew not found in ${root}`);
       }
       if (b.options.gitPullBeforeBuild) {
         this.#setState(b, 'pulling');
-        const code = await this.#exec(b, ctx, 'git', ['-c', `safe.directory=${config.projectPath}`, '-C', config.projectPath, 'pull', '--ff-only'], { env, timeoutMs: 5 * 60_000 });
+        const code = await this.#exec(b, ctx, 'git', [
+          '-c', `safe.directory=${root}`, '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.ext.allow=never',
+          '-c', 'credential.helper=', '-C', root, 'pull', '--ff-only',
+        ], { env: { ...env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: ASKPASS, VENDROID_GIT_TOKEN: config.gitToken }, timeoutMs: 5 * 60_000 });
         check();
         if (code !== 0) throw new Error(`git pull exited with ${code}`);
       }
 
-      b.commit = await this.#commitInfo(env);
+      b.commit = await this.#commitInfo(root, env);
       if (b.commit) this.#line(b, `Commit: ${b.commit.sha} ${b.commit.subject}`);
 
       this.#setState(b, 'building');
@@ -254,7 +277,7 @@ export class BuildManager {
           ? `Release signing: keystore ${path.basename(config.signing.storeFile)}, alias ${config.signing.keyAlias}`
           : 'Release signing: not configured (set RELEASE_KEYSTORE_*); APK will be unsigned and cannot be installed');
       }
-      try { fs.chmodSync(path.join(config.projectPath, 'gradlew'), 0o755); } catch { /* best effort */ }
+      try { fs.chmodSync(path.join(root, 'gradlew'), 0o755); } catch { /* best effort */ }
       const gradleArgs = [
         ...TASKS[b.task].args,
         '--console=plain', '--no-daemon', '--stacktrace',
@@ -267,8 +290,8 @@ export class BuildManager {
       if (b.signed) ensureGradleProperties({ signing: true });
       let code;
       try {
-        code = await this.#exec(b, ctx, path.join(config.projectPath, 'gradlew'), gradleArgs, {
-          cwd: config.projectPath, env, timeoutMs: config.buildTimeoutMs,
+        code = await this.#exec(b, ctx, path.join(root, 'gradlew'), gradleArgs, {
+          cwd: root, env, timeoutMs: config.buildTimeoutMs,
         });
       } finally {
         if (b.signed) ensureGradleProperties(); // drop the signing secrets again
@@ -277,7 +300,7 @@ export class BuildManager {
       b.exitCode = code;
       if (code !== 0) throw new Error(`Gradle exited with code ${code}`);
 
-      const apk = this.#collectApk(b);
+      const apk = this.#collectApk(b, root, project.module);
       if (!apk) throw new Error('Build succeeded but no APK was found under build/outputs/apk');
       const problem = apkProblem(path.join(config.artifactsDir, apk.file));
       if (problem) throw new Error(problem);
@@ -321,8 +344,8 @@ export class BuildManager {
     }
   }
 
-  async #commitInfo(env) {
-    const r = await run('git', ['-c', `safe.directory=${config.projectPath}`, '-C', config.projectPath, 'log', '-1', '--format=%h%x09%an%x09%s'], { env, timeoutMs: 10_000 });
+  async #commitInfo(root, env) {
+    const r = await run('git', ['-c', `safe.directory=${root}`, '-C', root, 'log', '-1', '--format=%h%x09%an%x09%s'], { env, timeoutMs: 10_000 });
     if (r.code !== 0) return null;
     const [sha, author, subject] = r.stdout.trim().split('\t');
     return sha ? { sha, author, subject: (subject || '').slice(0, 200) } : null;
@@ -339,15 +362,16 @@ export class BuildManager {
     b.hermes = await notifyHermes({
       event: 'build_failed', jobId: b.id, packageName: b.packageName, deviceSerial: b.deviceSerial,
       errorTail: sliceBuildError(this.tail(b.id, 400)),
+      projectId: b.projectId, projectName: b.projectName,
     });
     this.#line(b, `Hermes: ${b.hermes.ok ? 'accepted' : 'failed'} (HTTP ${b.hermes.status}) ${b.hermes.response}`.slice(0, 300));
     this.#save(b);
     this.#emitState(b);
   }
 
-  #collectApk(b) {
+  #collectApk(b, projectRoot, module) {
     const variant = TASKS[b.task].variant;
-    const root = path.join(config.projectPath, ...config.appModule.split(':'), 'build', 'outputs', 'apk');
+    const root = path.join(projectRoot, ...module.split(':'), 'build', 'outputs', 'apk');
     const found = [];
     const walk = (dir, depth) => {
       let ents;
@@ -424,7 +448,13 @@ export class BuildManager {
 
   #prune() {
     const done = [...this.builds.values()].filter((b) => TERMINAL.has(b.state)).sort((a, c) => c.createdAt.localeCompare(a.createdAt));
-    for (const b of done.slice(config.maxBuildHistory)) {
+    const seen = new Map();
+    const drop = done.filter((b) => {
+      const n = (seen.get(b.projectId) || 0) + 1;
+      seen.set(b.projectId, n);
+      return n > config.maxBuildHistory;
+    });
+    for (const b of drop) {
       this.builds.delete(b.id);
       const s = this.bufs.get(b.id);
       if (s) { s.out.end(); this.bufs.delete(b.id); }
