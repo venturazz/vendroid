@@ -1,0 +1,13 @@
+{
+  "name": "android-remote-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted remote Android build & physical device test runner (ARM64). Zero runtime dependencies.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/"
+  }
+}

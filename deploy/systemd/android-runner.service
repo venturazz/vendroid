@@ -1,0 +1,34 @@
+[Unit]
+Description=Android Remote Build & Device Test Runner
+After=network-online.target zerotier-one.service wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=android-runner
+Group=android-runner
+WorkingDirectory=/opt/android-runner
+EnvironmentFile=/etc/android-runner.env
+# HOME holds ~/.android (ADB RSA keys -> phone authorization survives reboots) and ~/.gradle
+Environment=HOME=/var/lib/android-runner
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/android-runner/src/server.js
+Restart=always
+RestartSec=5
+# Gradle/adb children live in the unit's cgroup and are killed together on stop.
+KillMode=control-group
+TimeoutStopSec=30
+LimitNOFILE=65536
+MemoryMax=21G
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/android-runner /opt/android-sdk /srv/android-project
+
+[Install]
+WantedBy=multi-user.target

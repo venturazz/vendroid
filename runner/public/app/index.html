@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Android Remote Runner</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body>
+<header class="top">
+  <strong class="brand">🤖 Android Runner</strong>
+  <button id="envBadge" class="badge" title="Environment health">env …</button>
+  <span class="grow"></span>
+  <span id="devBadge" class="badge">device …</span>
+  <input id="quickTarget" placeholder="tunnel_ip:5555" size="18" spellcheck="false">
+  <button id="quickConnect">Connect</button>
+  <button id="quickReconnect" title="Disconnect + connect">Reconnect</button>
+  <button id="adbRestart" title="adb kill-server && start-server">Restart ADB</button>
+  <span id="aiBadge" class="badge">AI …</span>
+  <button id="logout" title="Sign out">🔓 Logout</button>
+</header>
+
+<div id="toast" class="toast" hidden></div>
+<dialog id="envDlg"><pre id="envPre"></pre><form method="dialog"><button>Close</button></form></dialog>
+
+<main class="layout">
+  <aside class="panel">
+    <h2>Build</h2>
+    <label>Variant
+      <select id="task"><option>assembleDebug</option><option>assembleRelease</option><option>clean assembleDebug</option></select>
+    </label>
+    <label>Package <input id="pkg" spellcheck="false" placeholder="com.example.app"></label>
+    <label class="chk"><input type="checkbox" id="oGit"> Git Pull</label>
+    <label class="chk"><input type="checkbox" id="oInstall" checked> Auto-Install</label>
+    <label class="chk"><input type="checkbox" id="oLaunch" checked> Auto-Launch</label>
+    <label class="chk"><input type="checkbox" id="oHermes"> Auto-Notify Hermes</label>
+    <div class="row">
+      <button id="btnBuild" class="primary">Build &amp; Deploy</button>
+      <button id="btnCancel" class="danger" disabled>Cancel</button>
+    </div>
+    <h2>History</h2>
+    <ul id="history" class="history"></ul>
+  </aside>
+
+  <section class="work">
+    <nav class="tabs">
+      <button data-tab="console" class="active">Build Console</button>
+      <button data-tab="logcat">Device Logcat</button>
+      <button data-tab="screen">Device Screen &amp; Actions</button>
+    </nav>
+
+    <div id="tab-console" class="tab">
+      <div class="bar">
+        <span id="bState" class="pill">idle</span><span id="bId" class="muted"></span>
+        <span id="bTimer" class="muted">00:00</span><span class="grow"></span>
+        <label class="chk"><input type="checkbox" id="bScroll" checked> autoscroll</label>
+        <button id="btnAnalyze">Analyze Error (9Router)</button>
+        <button id="btnInvestigate">Investigate (Hermes)</button>
+      </div>
+      <pre id="bLog" class="log"></pre>
+      <div id="aiOut" class="ai" hidden></div>
+    </div>
+
+    <div id="tab-logcat" class="tab" hidden>
+      <div class="bar wrap">
+        <select id="lcSerial" title="Device"></select>
+        <select id="lcLevel" title="Minimum level"><option>V</option><option>D</option><option>I</option><option selected>W</option><option>E</option></select>
+        <input id="lcTag" placeholder="tag" size="12">
+        <input id="lcQ" placeholder="keyword" size="14">
+        <input id="lcPkg" placeholder="package (pid filter)" size="20">
+        <button id="lcStart" class="primary">Start</button>
+        <button id="lcPause" disabled>Pause</button>
+        <button id="lcClear">Clear</button>
+        <button id="lcExport">Export .log</button>
+        <button id="lcTriage">Triage Crash (9Router)</button>
+        <span id="lcStatus" class="muted"></span>
+      </div>
+      <pre id="lcLog" class="log"></pre>
+      <div id="lcAi" class="ai" hidden></div>
+    </div>
+
+    <div id="tab-screen" class="tab" hidden>
+      <div class="bar wrap">
+        <select id="scSerial" title="Device"></select>
+        <button id="scCapture" class="primary">Capture Screen</button>
+        <label class="chk"><input type="checkbox" id="scAuto"> auto-refresh (3s)</label>
+        <span class="grow"></span>
+        <button id="scInstall">Install Latest APK</button>
+        <button id="scLaunch">Launch</button>
+        <button id="scStop">Force Stop</button>
+        <button id="scClear" class="danger">Clear App Data</button>
+      </div>
+      <div class="shot"><img id="scImg" alt="Device screenshot" hidden><p id="scHint" class="muted">No screenshot yet.</p></div>
+    </div>
+  </section>
+</main>
+<script src="/assets/app.js" type="module"></script>
+</body></html>

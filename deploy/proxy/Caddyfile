@@ -1,0 +1,16 @@
+# /etc/caddy/Caddyfile  (Caddy obtains and renews the TLS certificate automatically)
+runner.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3080 {
+		# Flush every write immediately -> live Gradle / logcat lines over SSE.
+		flush_interval -1
+		transport http {
+			read_timeout 1h
+			dial_timeout 5s
+		}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}
