@@ -170,6 +170,15 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('.ed:not([hidden]) .cm-content')].some((e) => e.textContent.includes('You tapped')), null, { timeout: 5000 });
 
   await page.waitForTimeout(1500); // let any late reloads land
+  const panes = await page.evaluate(() => [...document.querySelectorAll('#editorHost > .ed')].map((e) => ({
+    hidden: e.hidden, display: getComputedStyle(e).display, z: [...e.parentNode.children].indexOf(e),
+    tapped: (e.textContent.match(/(You tapped|"Tapped) \$count/g) || []).join(','),
+  })));
+  console.log('[ui] panes', JSON.stringify(panes), 'tabs', await page.$$eval('.tab', (t) => t.map((x) => x.textContent)));
+  if (panes.filter((p) => p.display !== 'none').length !== 1) problems.push(`expected exactly one visible editor pane: ${JSON.stringify(panes)}`);
+  const vis = panes.find((p) => p.display !== 'none');
+  if (!vis || !vis.tapped.includes('You tapped') || vis.tapped.includes('"Tapped')) problems.push(`visible editor shows ${vis?.tapped}`);
+  await shot('after-reapply');
   if (!(await page.textContent('.ed:not([hidden]) .cm-content')).includes('You tapped')) problems.push('editor reverted to stale content after re-apply');
   if (await page.$('.tab.dirty')) problems.push('a tab is dirty after apply');
 
