@@ -63,7 +63,7 @@ chmod 640 "$ENV_FILE"
 # Optional first clone of the Android project
 if [ -n "${PROJECT_GIT_URL:-}" ] && [ -z "$(ls -A "$PROJECT_DIR")" ]; then
   log "cloning $PROJECT_GIT_URL"
-  sudo -u "$SVC_USER" git clone --branch "${PROJECT_GIT_BRANCH:-main}" -- "$PROJECT_GIT_URL" "$PROJECT_DIR"
+  sudo -u "$SVC_USER" env HOME="$STATE_DIR" git clone --branch "${PROJECT_GIT_BRANCH:-main}" -- "$PROJECT_GIT_URL" "$PROJECT_DIR"
 fi
 
 if [ "${SKIP_SDK:-0}" != "1" ]; then
@@ -76,7 +76,15 @@ if [ "${SKIP_SDK:-0}" != "1" ]; then
 fi
 
 log "installing systemd unit"
-install -m 644 "$REPO_DIR/deploy/systemd/android-runner.service" /etc/systemd/system/android-runner.service
+NODE_BIN="$(command -v node)"
+case "$NODE_BIN" in
+  /usr/*|/opt/*) ;;
+  *) # node lives somewhere the hardened unit can't read (e.g. under /home with ProtectHome); copy it
+     install -m 755 "$NODE_BIN" /usr/local/bin/android-runner-node; NODE_BIN=/usr/local/bin/android-runner-node ;;
+esac
+sed "s|^ExecStart=/usr/bin/node |ExecStart=$NODE_BIN |" "$REPO_DIR/deploy/systemd/android-runner.service" \
+  > /etc/systemd/system/android-runner.service
+chmod 644 /etc/systemd/system/android-runner.service
 systemctl daemon-reload
 systemctl enable android-runner >/dev/null
 systemctl restart android-runner
