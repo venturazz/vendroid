@@ -3,8 +3,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { config, configProblems } from './config.js';
-import { Router, readJson, sendJson, serveStatic } from './http.js';
+import { config, configProblems, aapt2Path } from './config.js';
+import { Router, readJson, readRaw, sendJson, serveStatic } from './http.js';
 import { openSse } from './sse.js';
 import * as auth from './auth.js';
 import * as adbm from './adb.js';
@@ -12,11 +12,14 @@ import * as ai from './ai.js';
 import { envHealth } from './health.js';
 import { BuildManager } from './builds.js';
 import { ensureGradleProperties } from './gradleProps.js';
+import { AdbWatchdog } from './watchdog.js';
+import { verifyGitWebhook } from './webhook.js';
 import { HttpError, LEVELS, bad, isBuildId, isLevel, isPackage, isSerial, isTcpTarget } from './validate.js';
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const trustProxy = ['1', 'true'].includes(String(process.env.TRUST_PROXY || '').toLowerCase());
 const builds = new BuildManager();
+const watchdog = new AdbWatchdog();
 const router = new Router();
 
 const SEC_HEADERS = {
@@ -27,8 +30,12 @@ const SEC_HEADERS = {
     "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
 };
 
-const clientIp = (req) =>
-  (trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || 'unknown';
+// Unix-socket connections only come from the edge relay (behind Traefik), so XFF is trusted there.
+const clientIp = (req) => {
+  const viaSocket = !req.socket.remoteAddress;
+  const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return ((trustProxy || viaSocket) && xff) || req.socket.remoteAddress || 'unknown';
+};
 
 const str = (v, max, name) => {
   if (v === undefined || v === null || v === '') return '';
@@ -70,10 +77,39 @@ router.get('/api/ai/status', async (req, res) => sendJson(res, 200, await ai.aiS
 router.get('/api/config', (req, res) => sendJson(res, 200, {
   defaultPackage: config.defaultPackage, defaultDevice: config.defaultDevice, levels: LEVELS,
   tasks: ['assembleDebug', 'assembleRelease', 'clean assembleDebug'],
+  releaseSigning: config.signingEnabled(),
+  gitWebhook: { enabled: !!config.gitWebhookSecret, path: '/api/hooks/git', branch: config.autoBuildBranch || null },
+  autoReconnect: watchdog.view(),
 }));
 
 // ---------------------------------------------------------------- builds
-router.post('/api/builds', (req, res, { body }) => sendJson(res, 202, builds.enqueue(body)));
+router.post('/api/builds', (req, res, { body }) =>
+  sendJson(res, 202, builds.enqueue(body, { trigger: req.authKind === 'token' ? 'api' : 'manual' })));
+
+// Push-to-deploy: GitHub/Gitea (X-Hub-Signature-256) or GitLab (X-Gitlab-Token). Authenticated by
+// the shared secret, not the session; pulls, builds and (by default) installs + launches.
+router.post('/api/hooks/git', (req, res, { raw }) => {
+  if (!config.gitWebhookSecret) throw new HttpError(404, 'Not found');
+  const hook = verifyGitWebhook(req, raw, config.gitWebhookSecret);
+  if (!hook.ok) throw new HttpError(401, hook.reason);
+  if (hook.ping) return sendJson(res, 200, { ok: true, pong: true });
+  if (!hook.ref || !hook.ref.startsWith('refs/heads/')) return sendJson(res, 202, { ok: true, ignored: 'not a branch push' });
+  const branch = hook.ref.slice('refs/heads/'.length);
+  if (config.autoBuildBranch && branch !== config.autoBuildBranch) {
+    return sendJson(res, 202, { ok: true, ignored: `branch ${branch} != ${config.autoBuildBranch}` });
+  }
+  if (hook.deleted) return sendJson(res, 202, { ok: true, ignored: 'branch deleted' });
+  if (builds.hasQueued('webhook')) return sendJson(res, 202, { ok: true, coalesced: true });
+  const wantDevice = !!config.defaultDevice;
+  const b = builds.enqueue({
+    task: config.autoBuildTask,
+    gitPullBeforeBuild: true,
+    autoInstallAfterBuild: wantDevice && config.autoBuildInstall,
+    autoLaunchAfterInstall: wantDevice && config.autoBuildInstall && config.autoBuildLaunch && !!config.defaultPackage,
+    autoNotifyHermes: config.autoBuildNotifyHermes,
+  }, { trigger: 'webhook', ref: branch });
+  sendJson(res, 202, { ok: true, buildId: b.id });
+}, { public: true, raw: true });
 router.get('/api/builds', (req, res) => sendJson(res, 200, { active: builds.activeId(), builds: builds.list() }));
 router.get('/api/builds/:id', (req, res, { params }) => sendJson(res, 200, builds.view(builds.get(params.id))));
 router.post('/api/builds/:id/cancel', (req, res, { params }) => sendJson(res, 200, builds.cancel(params.id)));
@@ -87,6 +123,17 @@ router.get('/api/builds/:id/apk', (req, res, { params }) => {
     'Content-Type': 'application/vnd.android.package-archive',
     'Content-Length': st.size,
     'Content-Disposition': `attachment; filename="${b.id}-${path.basename(file).replace(/[^A-Za-z0-9._-]/g, '_')}"`,
+  });
+  fs.createReadStream(file).pipe(res);
+});
+
+router.get('/api/builds/:id/log', (req, res, { params }) => {
+  const b = builds.get(params.id);
+  const file = path.join(config.buildsDir, `${b.id}.log`);
+  if (!fs.existsSync(file)) throw new HttpError(404, 'No log for this build');
+  res.writeHead(200, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${b.id}.log"`,
   });
   fs.createReadStream(file).pipe(res);
 });
@@ -110,21 +157,25 @@ router.get('/api/builds/:id/stream', (req, res, { params, url }) => {
 // ---------------------------------------------------------------- devices
 router.get('/api/devices', async (req, res) => {
   try {
-    sendJson(res, 200, { devices: await adbm.listDevices() });
+    sendJson(res, 200, { devices: await adbm.listDevices(), watchdog: watchdog.view() });
   } catch (e) {
     throw new HttpError(502, e.message);
   }
 });
 router.post('/api/devices/connect', async (req, res, { body }) => {
   if (!isTcpTarget(body.target)) throw bad('target must be <ipv4>:<port>');
+  watchdog.noteManual('connect', body.target);
   sendJson(res, 200, await adbm.connect(body.target));
 });
 router.post('/api/devices/disconnect', async (req, res, { body }) => {
   if (!isTcpTarget(body.target)) throw bad('target must be <ipv4>:<port>');
+  watchdog.noteManual('disconnect', body.target);
   sendJson(res, 200, await adbm.disconnect(body.target));
 });
 router.post('/api/adb/restart', async (req, res, { body }) => {
-  sendJson(res, 200, await adbm.restartHelper(body.mode, body.serial || config.defaultDevice));
+  const serial = body.serial || config.defaultDevice;
+  if (body.mode === 'reconnect') watchdog.noteManual('connect', serial);
+  sendJson(res, 200, await adbm.restartHelper(body.mode, serial));
 });
 router.post('/api/devices/action', async (req, res, { body }) => {
   const serial = serialOf(body.serial);
@@ -218,11 +269,17 @@ async function handle(req, res) {
     const m = router.match(req.method === 'HEAD' ? 'GET' : req.method, url.pathname);
     if (!m) throw new HttpError(404, 'Not found');
     if (!m.route.opts.public) {
-      if (!auth.isAuthenticated(req)) throw new HttpError(401, 'Authentication required');
+      req.authKind = auth.isAuthenticated(req);
+      if (!req.authKind) throw new HttpError(401, 'Authentication required');
     }
     if (req.method !== 'GET' && req.method !== 'HEAD' && !auth.sameOrigin(req)) throw new HttpError(403, 'Cross-origin request blocked');
-    const body = await readJson(req);
-    await m.route.handler(req, res, { params: m.params, body, url });
+    if (m.route.opts.raw) {
+      const raw = await readRaw(req, 5 * 1024 * 1024);
+      await m.route.handler(req, res, { params: m.params, raw, url });
+    } else {
+      const body = await readJson(req);
+      await m.route.handler(req, res, { params: m.params, body, url });
+    }
   } catch (e) {
     const status = e instanceof HttpError ? e.status : 500;
     if (status === 500) console.error(`[error] ${req.method} ${url.pathname}:`, e);
@@ -241,18 +298,42 @@ export function start() {
   auth.initAuth();
   builds.init();
   const gp = ensureGradleProperties();
-  const server = http.createServer(handle);
-  server.requestTimeout = 0; // long-lived SSE
-  server.timeout = 0;
-  server.keepAliveTimeout = 65_000;
+  watchdog.start();
+  const mk = () => {
+    const srv = http.createServer(handle);
+    srv.requestTimeout = 0; // long-lived SSE
+    srv.timeout = 0;
+    srv.keepAliveTimeout = 65_000;
+    srv.on('error', (e) => {
+      console.error(`listen error: ${e.message}`);
+      process.exit(1);
+    });
+    return srv;
+  };
+  const servers = [];
+  if (config.listenSocket) {
+    fs.mkdirSync(path.dirname(config.listenSocket), { recursive: true });
+    fs.rmSync(config.listenSocket, { force: true }); // stale socket from a previous run
+    const sock = mk();
+    sock.listen(config.listenSocket, () => {
+      fs.chmodSync(config.listenSocket, 0o660);
+      console.log(`also listening on unix:${config.listenSocket}`);
+    });
+    servers.push(sock);
+  }
+  const server = mk();
+  servers.push(server);
   server.listen(config.port, config.host, () => {
     console.log(`android-remote-runner listening on http://${config.host}:${config.port}`);
     console.log(`project=${config.projectPath} data=${config.dataDir}${gp ? ` gradle.properties=${gp}` : ''}`);
+    console.log(`aapt2=${aapt2Path() || '(SDK default / pending bootstrap)'} adb=${config.adbBin} release-signing=${config.signingEnabled() ? 'on' : 'off'}`
+      + ` auto-reconnect=${watchdog.enabled ? watchdog.target : 'off'} git-webhook=${config.gitWebhookSecret ? 'on' : 'off'}`);
   });
   const shutdown = () => {
+    watchdog.stop();
     const id = builds.activeId();
     if (id) { try { builds.cancel(id); } catch { /* ignore */ } }
-    server.close();
+    servers.forEach((s) => s.close());
     setTimeout(() => process.exit(0), 3000).unref();
   };
   process.on('SIGTERM', shutdown);

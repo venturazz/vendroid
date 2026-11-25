@@ -3,8 +3,9 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
-import { childEnv, lineSplitter, killGroup } from './exec.js';
+import { config, aapt2Path, bootstrapState } from './config.js';
+import { ensureGradleProperties } from './gradleProps.js';
+import { childEnv, lineSplitter, killGroup, run } from './exec.js';
 import * as adbm from './adb.js';
 import { notifyHermes, sliceBuildError } from './ai.js';
 import { HttpError, TASKS, bad, isBuildId, isPackage, isSerial, isTask } from './validate.js';
@@ -13,6 +14,18 @@ const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const KEEP_BUFFERS = 5;
 
 class Cancelled extends Error {}
+
+/** AGP's injected signing properties (what Android Studio uses), passed as env, not argv. */
+function signingEnv() {
+  const p = 'ORG_GRADLE_PROJECT_android.injected.signing.';
+  const sg = config.signing;
+  return {
+    [`${p}store.file`]: sg.storeFile,
+    [`${p}store.password`]: sg.storePassword,
+    [`${p}key.alias`]: sg.keyAlias,
+    [`${p}key.password`]: sg.keyPassword,
+  };
+}
 
 export class BuildManager {
   constructor() {
@@ -69,7 +82,12 @@ export class BuildManager {
     return p.startsWith(config.artifactsDir + path.sep) && fs.existsSync(p) ? p : null;
   }
 
-  enqueue(body) {
+  /** True if a build triggered by `trigger` is still waiting in the queue (push coalescing). */
+  hasQueued(trigger) {
+    return this.queue.some((id) => this.builds.get(id)?.trigger === trigger);
+  }
+
+  enqueue(body, { trigger = 'manual', ref = null } = {}) {
     if (!isTask(body.task)) throw bad(`task must be one of: ${Object.keys(TASKS).join(', ')}`);
     const flag = (k) => {
       if (body[k] === undefined) return false;
@@ -90,10 +108,15 @@ export class BuildManager {
       throw bad('A device serial/address is required for auto-install / auto-launch');
     }
     if (options.autoLaunchAfterInstall && !packageName) throw bad('A package name is required for auto-launch');
+    if (TASKS[body.task].variant === 'release' && !config.signingEnabled() && options.autoInstallAfterBuild) {
+      throw bad('Release APKs are unsigned until RELEASE_KEYSTORE_PATH / _PASSWORD / RELEASE_KEY_ALIAS are set; '
+        + 'turn off Auto-Install or configure signing');
+    }
 
     const id = `b${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
     const b = {
-      id, task: body.task, options, deviceSerial, packageName,
+      id, task: body.task, options, deviceSerial, packageName, trigger, ref, commit: null,
+      signed: TASKS[body.task].variant === 'release' ? config.signingEnabled() : null,
       state: 'queued', createdAt: new Date().toISOString(),
       startedAt: null, finishedAt: null, exitCode: null, error: null,
       apkFile: null, apkSize: null, hermes: null, lineCount: 0,
@@ -219,17 +242,28 @@ export class BuildManager {
       GRADLE_USER_HOME: config.gradleUserHome,
     });
     try {
+      await this.#waitForSdk(b, ctx);
+      check();
+      ensureGradleProperties(); // picks up the aapt2 path recorded by the SDK bootstrap
       if (!fs.existsSync(path.join(config.projectPath, 'gradlew'))) {
         throw new Error(`gradlew not found in ${config.projectPath}`);
       }
       if (b.options.gitPullBeforeBuild) {
         this.#setState(b, 'pulling');
-        const code = await this.#exec(b, ctx, 'git', ['-C', config.projectPath, 'pull', '--ff-only'], { env, timeoutMs: 5 * 60_000 });
+        const code = await this.#exec(b, ctx, 'git', ['-c', `safe.directory=${config.projectPath}`, '-C', config.projectPath, 'pull', '--ff-only'], { env, timeoutMs: 5 * 60_000 });
         check();
         if (code !== 0) throw new Error(`git pull exited with ${code}`);
       }
 
+      b.commit = await this.#commitInfo(env);
+      if (b.commit) this.#line(b, `Commit: ${b.commit.sha} ${b.commit.subject}`);
+
       this.#setState(b, 'building');
+      if (TASKS[b.task].variant === 'release') {
+        this.#line(b, b.signed
+          ? `Release signing: keystore ${path.basename(config.signing.storeFile)}, alias ${config.signing.keyAlias}`
+          : 'Release signing: not configured (set RELEASE_KEYSTORE_*); APK will be unsigned and cannot be installed');
+      }
       try { fs.chmodSync(path.join(config.projectPath, 'gradlew'), 0o755); } catch { /* best effort */ }
       const gradleArgs = [
         ...TASKS[b.task].args,
@@ -238,9 +272,10 @@ export class BuildManager {
         `-Dorg.gradle.jvmargs=${config.gradleJvmArgs}`,
         `-Pkotlin.daemon.jvmargs=${config.kotlinDaemonJvmArgs}`,
       ];
-      if (config.aapt2Override) gradleArgs.push(`-Pandroid.aapt2FromMavenOverride=${config.aapt2Override}`);
+      const aapt2 = aapt2Path();
+      if (aapt2) gradleArgs.push(`-Pandroid.aapt2FromMavenOverride=${aapt2}`);
       const code = await this.#exec(b, ctx, path.join(config.projectPath, 'gradlew'), gradleArgs, {
-        cwd: config.projectPath, env, timeoutMs: config.buildTimeoutMs,
+        cwd: config.projectPath, env: b.signed ? { ...env, ...signingEnv() } : env, timeoutMs: config.buildTimeoutMs,
       });
       check();
       b.exitCode = code;
@@ -273,6 +308,26 @@ export class BuildManager {
     } finally {
       this.current = null;
     }
+  }
+
+  /** First Docker boot installs the SDK in the background; hold the build instead of failing it. */
+  async #waitForSdk(b, ctx) {
+    if (bootstrapState() !== 'running') return;
+    this.#line(b, 'Waiting for the Android SDK install to finish (first start only)…');
+    const until = Date.now() + 30 * 60_000;
+    while (bootstrapState() === 'running' && !ctx.cancelled && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    if (bootstrapState() === 'failed') {
+      throw new Error('Android SDK install failed; see /data/bootstrap.log or the Environment dialog');
+    }
+  }
+
+  async #commitInfo(env) {
+    const r = await run('git', ['-c', `safe.directory=${config.projectPath}`, '-C', config.projectPath, 'log', '-1', '--format=%h%x09%an%x09%s'], { env, timeoutMs: 10_000 });
+    if (r.code !== 0) return null;
+    const [sha, author, subject] = r.stdout.trim().split('\t');
+    return sha ? { sha, author, subject: (subject || '').slice(0, 200) } : null;
   }
 
   async #ensureConnected(b, ctx, env) {

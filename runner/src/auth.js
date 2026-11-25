@@ -8,7 +8,29 @@ import { parseCookies } from './http.js';
 export const COOKIE = 'runner_session';
 let secret;
 
+/**
+ * Zero-config first boot: without AUTH_PASSWORD a random password is generated once, stored in
+ * DATA_DIR/initial_password (0600) and printed to the service log (journalctl / docker logs).
+ */
+function ensurePassword() {
+  if (config.authPassword) return;
+  const f = path.join(config.dataDir, 'initial_password');
+  let pw = '';
+  try { pw = fs.readFileSync(f, 'utf8').trim(); } catch { /* first boot */ }
+  if (pw.length < 8) {
+    pw = crypto.randomBytes(18).toString('base64url');
+    fs.writeFileSync(f, pw + '\n', { mode: 0o600 });
+  }
+  config.authPassword = pw;
+  config.generatedPassword = true;
+  console.log('='.repeat(72));
+  console.log(` AUTH_PASSWORD not set. Dashboard password: ${pw}`);
+  console.log(` (stored in ${f}; set AUTH_PASSWORD to choose your own)`);
+  console.log('='.repeat(72));
+}
+
 export function initAuth() {
+  ensurePassword();
   if (config.sessionSecret.length >= 16) {
     secret = config.sessionSecret;
     return;

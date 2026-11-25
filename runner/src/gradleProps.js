@@ -3,7 +3,7 @@
 // and the aarch64 aapt2 override apply to every project without modifying its repository.
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
+import { config, aapt2Path } from './config.js';
 
 const BEGIN = '# >>> android-remote-runner managed (do not edit) >>>';
 const END = '# <<< android-remote-runner managed <<<';
@@ -18,7 +18,8 @@ export function managedBlock() {
     'org.gradle.caching=true',
     `org.gradle.workers.max=${config.gradleMaxWorkers}`,
   ];
-  if (config.aapt2Override) lines.push(`android.aapt2FromMavenOverride=${config.aapt2Override}`);
+  const aapt2 = aapt2Path();
+  if (aapt2) lines.push(`android.aapt2FromMavenOverride=${aapt2}`);
   lines.push(END, '');
   return lines.join('\n');
 }

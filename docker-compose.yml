@@ -1,23 +1,28 @@
-# Android Remote Runner - Docker Compose / Coolify (OCI Ampere linux/arm64).
+# Android Remote Runner: Docker Compose / Coolify (OCI Ampere linux/arm64).
 #
-# network_mode: host (default) is what makes BOTH of these work without extra plumbing:
-#   * 9router (127.0.0.1:20128) and hermes-agent (127.0.0.1:8644) stay loopback-only on the host
-#   * adb reaches the phone via the host's ZeroTier / WireGuard interface and routes
-# See docs/RUNBOOK.md for the bridge-mode alternative (docker-compose.bridge.yml).
+#   runner  network_mode: host. Reaches the phone through the host's ZeroTier/WireGuard
+#           interface and the loopback-only 9Router (127.0.0.1:20128) / Hermes (127.0.0.1:8644).
+#           Listens on 127.0.0.1:${PORT} (host Caddy/Nginx) and on a Unix socket for `edge`.
+#   edge    Tiny byte-for-byte relay on the normal bridge network, so Coolify's proxy can route a
+#           domain to it (Coolify cannot route to host-network containers). SSE is not buffered.
+#
+# Only AUTH_PASSWORD is worth setting up front; without it a password is generated and printed
+# in the runner logs. Everything else has working defaults.
 name: android-remote-runner
+
+x-image: &image
+  build:
+    context: ./runner
+    dockerfile: Dockerfile.arm64
+    args:
+      INSTALL_BOX64: ${INSTALL_BOX64:-false}
+  image: android-remote-runner:local
+  platform: linux/arm64
 
 services:
   runner:
-    build:
-      context: ./runner
-      dockerfile: Dockerfile.arm64
-      args:
-        JDK_PACKAGE: ${JDK_PACKAGE:-openjdk-17-jdk-headless}
-        INSTALL_BOX64: ${INSTALL_BOX64:-false}
-    platform: linux/arm64
-    image: android-remote-runner:local
+    <<: *image
     restart: unless-stopped
-    init: true
     network_mode: host
     stop_grace_period: 30s
     mem_limit: ${RUNNER_MEM_LIMIT:-20g}
@@ -25,38 +30,75 @@ services:
       - no-new-privileges:true
     environment:
       PORT: ${PORT:-3080}
-      HOST: ${RUNNER_BIND_HOST:-0.0.0.0}   # 127.0.0.1 if a host-level Caddy/Nginx proxies to it
-      TRUST_PROXY: ${TRUST_PROXY:-false}
-      AUTH_PASSWORD: ${AUTH_PASSWORD:?AUTH_PASSWORD is required}
+      HOST: ${RUNNER_BIND_HOST:-127.0.0.1}
+      LISTEN_SOCKET: /run/runner/runner.sock
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       API_TOKEN: ${API_TOKEN:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
-      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
-      ANDROID_PROJECT_PATH: /workspace/android-project   # fixed: lives on the `project` volume
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
       APP_MODULE: ${APP_MODULE:-app}
       DEFAULT_PACKAGE_NAME: ${DEFAULT_PACKAGE_NAME:-}
       DEFAULT_DEVICE_ADDRESS: ${DEFAULT_DEVICE_ADDRESS:-}
+      ADB_AUTO_RECONNECT: ${ADB_AUTO_RECONNECT:-true}
       PROJECT_GIT_URL: ${PROJECT_GIT_URL:-}
       PROJECT_GIT_BRANCH: ${PROJECT_GIT_BRANCH:-main}
+      GIT_WEBHOOK_SECRET: ${GIT_WEBHOOK_SECRET:-}
+      AUTO_BUILD_BRANCH: ${AUTO_BUILD_BRANCH:-}
+      AUTO_BUILD_TASK: ${AUTO_BUILD_TASK:-assembleDebug}
+      AUTO_BUILD_INSTALL: ${AUTO_BUILD_INSTALL:-true}
+      AUTO_BUILD_LAUNCH: ${AUTO_BUILD_LAUNCH:-true}
+      AUTO_BUILD_NOTIFY_HERMES: ${AUTO_BUILD_NOTIFY_HERMES:-false}
       SDK_PACKAGES: ${SDK_PACKAGES:-platforms;android-35 build-tools;35.0.0}
       SDK_AUTO_INSTALL: ${SDK_AUTO_INSTALL:-true}
       AAPT2_MODE: ${AAPT2_MODE:-auto}
       AAPT2_BINARY: ${AAPT2_BINARY:-}
+      JAVA_VERSION: ${JAVA_VERSION:-17}
       GRADLE_JVM_ARGS: ${GRADLE_JVM_ARGS:--Xmx4096m -XX:+UseG1GC -Dfile.encoding=UTF-8}
       KOTLIN_DAEMON_JVM_ARGS: ${KOTLIN_DAEMON_JVM_ARGS:--Xmx3072m}
       GRADLE_MAX_WORKERS: ${GRADLE_MAX_WORKERS:-3}
       BUILD_TIMEOUT_MIN: ${BUILD_TIMEOUT_MIN:-45}
       MAX_BUILD_HISTORY: ${MAX_BUILD_HISTORY:-30}
+      RELEASE_KEYSTORE_PATH: ${RELEASE_KEYSTORE_PATH:-}
+      RELEASE_KEYSTORE_PASSWORD: ${RELEASE_KEYSTORE_PASSWORD:-}
+      RELEASE_KEY_ALIAS: ${RELEASE_KEY_ALIAS:-}
+      RELEASE_KEY_PASSWORD: ${RELEASE_KEY_PASSWORD:-}
       NINE_ROUTER_URL: ${NINE_ROUTER_URL:-http://127.0.0.1:20128/v1}
       NINE_ROUTER_API_KEY: ${NINE_ROUTER_API_KEY:-}
       NINE_ROUTER_MODEL: ${NINE_ROUTER_MODEL:-auto}
       HERMES_WEBHOOK_URL: ${HERMES_WEBHOOK_URL:-http://127.0.0.1:8644/webhook}
       HERMES_WEBHOOK_SECRET: ${HERMES_WEBHOOK_SECRET:-}
     volumes:
-      - android-sdk:/opt/android-sdk        # SDK + recorded aapt2 path
-      - gradle-home:/root/.gradle           # dependency + build cache
-      - android-keys:/root/.android         # ADB RSA keys: phone stays authorized across redeploys
-      - runner-data:/data                   # build history, logs, APK artifacts, session secret
-      - project:/workspace                  # Android project checkout
+      - android-sdk:/opt/android-sdk   # SDK + aarch64 build-tools
+      - gradle-home:/root/.gradle      # dependency + build cache
+      - android-keys:/root/.android    # ADB RSA keys: the phone stays authorized across redeploys
+      - runner-data:/data              # history, logs, APKs, generated password, session secret
+      - project:/workspace             # Android project checkout (/workspace/android-project)
+      - runner-sock:/run/runner        # Unix socket shared with `edge`
+
+  edge:
+    <<: *image
+    restart: unless-stopped
+    command: ["node", "/opt/runner/src/edge.js"]
+    depends_on:
+      - runner
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(3080,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    environment:
+      # Coolify: routes the domain you assign to this service to container port 3080.
+      - SERVICE_FQDN_EDGE_3080
+      - PORT=3080
+      - RUNNER_SOCKET=/run/runner/runner.sock
+    expose:
+      - "3080"
+    volumes:
+      - runner-sock:/run/runner
 
 volumes:
   android-sdk:
@@ -64,3 +106,4 @@ volumes:
   android-keys:
   runner-data:
   project:
+  runner-sock:

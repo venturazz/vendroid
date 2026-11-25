@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 // Secrets must never be visible to Gradle build scripts or adb.
 const SECRET_ENV = [
   'AUTH_PASSWORD', 'API_TOKEN', 'SESSION_SECRET', 'NINE_ROUTER_API_KEY', 'HERMES_WEBHOOK_SECRET',
+  'GIT_WEBHOOK_SECRET', 'RELEASE_KEYSTORE_PASSWORD', 'RELEASE_KEY_PASSWORD',
 ];
 export function childEnv(extra = {}) {
   const e = { ...process.env, ...extra };

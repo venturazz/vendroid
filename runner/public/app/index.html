@@ -1,22 +1,28 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Android Remote Runner</title><link rel="stylesheet" href="/assets/style.css"></head>
+<meta name="color-scheme" content="dark">
+<title>Android Runner</title><link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/style.css"></head>
 <body>
 <header class="top">
   <strong class="brand">🤖 Android Runner</strong>
-  <button id="envBadge" class="badge" title="Environment health">env …</button>
+  <button id="envBadge" class="badge" title="Environment health (click for details)">env …</button>
+  <span id="aiBadge" class="badge">AI …</span>
   <span class="grow"></span>
   <span id="devBadge" class="badge">device …</span>
-  <input id="quickTarget" placeholder="tunnel_ip:5555" size="18" spellcheck="false">
+  <input id="quickTarget" placeholder="tunnel_ip:5555" size="17" spellcheck="false" aria-label="Device address">
   <button id="quickConnect">Connect</button>
   <button id="quickReconnect" title="Disconnect + connect">Reconnect</button>
-  <button id="adbRestart" title="adb kill-server && start-server">Restart ADB</button>
-  <span id="aiBadge" class="badge">AI …</span>
-  <button id="logout" title="Sign out">🔓 Logout</button>
+  <button id="adbRestart" title="adb kill-server, start-server">Restart ADB</button>
+  <button id="logout" title="Sign out">🔒 Logout</button>
 </header>
 
-<div id="toast" class="toast" hidden></div>
-<dialog id="envDlg"><pre id="envPre"></pre><form method="dialog"><button>Close</button></form></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+<dialog id="envDlg">
+  <h3>Environment</h3>
+  <table id="envTable" class="kv"></table>
+  <details><summary>Raw JSON</summary><pre id="envPre"></pre></details>
+  <form method="dialog"><button>Close</button></form>
+</dialog>
 
 <main class="layout">
   <aside class="panel">
@@ -24,53 +30,61 @@
     <label>Variant
       <select id="task"><option>assembleDebug</option><option>assembleRelease</option><option>clean assembleDebug</option></select>
     </label>
+    <p id="signHint" class="hint" hidden></p>
     <label>Package <input id="pkg" spellcheck="false" placeholder="com.example.app"></label>
     <label class="chk"><input type="checkbox" id="oGit"> Git Pull</label>
     <label class="chk"><input type="checkbox" id="oInstall" checked> Auto-Install</label>
     <label class="chk"><input type="checkbox" id="oLaunch" checked> Auto-Launch</label>
+    <label class="chk"><input type="checkbox" id="oFollow" checked> Open Logcat after launch</label>
     <label class="chk"><input type="checkbox" id="oHermes"> Auto-Notify Hermes</label>
     <div class="row">
-      <button id="btnBuild" class="primary">Build &amp; Deploy</button>
+      <button id="btnBuild" class="primary" title="Ctrl/⌘ + Enter">Build &amp; Deploy</button>
       <button id="btnCancel" class="danger" disabled>Cancel</button>
     </div>
     <h2>History</h2>
     <ul id="history" class="history"></ul>
+    <p id="histEmpty" class="muted small">No builds yet. Press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start one.</p>
   </aside>
 
   <section class="work">
-    <nav class="tabs">
-      <button data-tab="console" class="active">Build Console</button>
-      <button data-tab="logcat">Device Logcat</button>
-      <button data-tab="screen">Device Screen &amp; Actions</button>
+    <nav class="tabs" role="tablist">
+      <button data-tab="console" class="active" role="tab">Build Console</button>
+      <button data-tab="logcat" role="tab">Device Logcat <span id="crashChip" class="chip err" hidden>crash</span></button>
+      <button data-tab="screen" role="tab">Device Screen &amp; Actions</button>
     </nav>
 
     <div id="tab-console" class="tab">
-      <div class="bar">
+      <div class="bar wrap">
         <span id="bState" class="pill">idle</span><span id="bId" class="muted"></span>
+        <span id="bCommit" class="muted small"></span>
         <span id="bTimer" class="muted">00:00</span><span class="grow"></span>
         <label class="chk"><input type="checkbox" id="bScroll" checked> autoscroll</label>
+        <a id="bLogDl" class="btn" hidden>Download log</a>
         <button id="btnAnalyze">Analyze Error (9Router)</button>
         <button id="btnInvestigate">Investigate (Hermes)</button>
       </div>
-      <pre id="bLog" class="log"></pre>
+      <pre id="bLog" class="log" tabindex="0"></pre>
       <div id="aiOut" class="ai" hidden></div>
     </div>
 
     <div id="tab-logcat" class="tab" hidden>
       <div class="bar wrap">
         <select id="lcSerial" title="Device"></select>
-        <select id="lcLevel" title="Minimum level"><option>V</option><option>D</option><option>I</option><option selected>W</option><option>E</option></select>
-        <input id="lcTag" placeholder="tag" size="12">
-        <input id="lcQ" placeholder="keyword" size="14">
-        <input id="lcPkg" placeholder="package (pid filter)" size="20">
+        <select id="lcLevel" title="Minimum level"><option>V</option><option>D</option><option>I</option><option>W</option><option>E</option></select>
+        <input id="lcTag" placeholder="tag" size="12" spellcheck="false">
+        <input id="lcQ" placeholder="keyword" size="14" spellcheck="false">
+        <input id="lcPkg" placeholder="package (pid filter)" size="20" spellcheck="false">
         <button id="lcStart" class="primary">Start</button>
         <button id="lcPause" disabled>Pause</button>
         <button id="lcClear">Clear</button>
         <button id="lcExport">Export .log</button>
+        <label class="chk"><input type="checkbox" id="lcScroll" checked> autoscroll</label>
+        <span id="lcStatus" class="muted small"></span>
+        <span class="grow"></span>
         <button id="lcTriage">Triage Crash (9Router)</button>
-        <span id="lcStatus" class="muted"></span>
+        <button id="lcHermes">Investigate (Hermes)</button>
       </div>
-      <pre id="lcLog" class="log"></pre>
+      <pre id="lcLog" class="log" tabindex="0"></pre>
       <div id="lcAi" class="ai" hidden></div>
     </div>
 
@@ -79,13 +93,14 @@
         <select id="scSerial" title="Device"></select>
         <button id="scCapture" class="primary">Capture Screen</button>
         <label class="chk"><input type="checkbox" id="scAuto"> auto-refresh (3s)</label>
+        <a id="scSave" class="btn" hidden>Save PNG</a>
         <span class="grow"></span>
         <button id="scInstall">Install Latest APK</button>
         <button id="scLaunch">Launch</button>
         <button id="scStop">Force Stop</button>
         <button id="scClear" class="danger">Clear App Data</button>
       </div>
-      <div class="shot"><img id="scImg" alt="Device screenshot" hidden><p id="scHint" class="muted">No screenshot yet.</p></div>
+      <div class="shot"><img id="scImg" alt="Device screenshot" hidden><p id="scHint" class="muted">No screenshot yet. Click <b>Capture Screen</b>.</p></div>
     </div>
   </section>
 </main>

@@ -1,0 +1,7 @@
+# CI-only override: mounts the generated sample project and a release keystore.
+services:
+  runner:
+    volumes:
+      - ${SAMPLE_DIR:?}:/workspace/android-project
+      - ${KEYSTORE_DIR:?}:/keys:ro
+      - ./.github/ci:/ci:ro

@@ -94,6 +94,24 @@ export function readJson(req, limit = 1024 * 1024) {
   });
 }
 
+export function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) {
+        reject(new HttpError(413, 'Request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 /** Serve a file from `root` (path-traversal safe). Returns false if not found. */
 export function serveStatic(res, root, relPath) {
   const full = path.resolve(root, '.' + path.posix.normalize('/' + relPath));

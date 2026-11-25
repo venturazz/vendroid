@@ -1,24 +1,29 @@
 # syntax=docker/dockerfile:1
-# Android Remote Runner - linux/arm64 (OCI Ampere). Build context: ./runner
-FROM --platform=linux/arm64 node:22-bookworm-slim AS node
+# Android Remote Runner for linux/arm64 (OCI Ampere). Build context: ./runner
+#
+# The Android SDK is NOT baked in: it is installed on first start into the persistent
+# /opt/android-sdk volume (licenses, platforms, build-tools, aarch64 aapt2), so image rebuilds
+# are fast and SDK upgrades don't need a new image.
+FROM node:22-bookworm-slim AS node
 
-FROM --platform=linux/arm64 ubuntu:24.04
-ARG JDK_PACKAGE=openjdk-17-jdk-headless
-# Set to "true" to compile box64 (x86_64 -> arm64 user-mode emulator) as an aapt2 fallback.
+FROM ubuntu:24.04
+# JDK 17 runs Gradle (AGP 7.4 to 8.x). JDK 21 is present for projects using jvmToolchain(21).
+ARG JDK_PACKAGES="openjdk-17-jdk-headless openjdk-21-jdk-headless"
+# "true" compiles box64 (x86_64 -> arm64 emulator) as an optional aapt2 fallback (AAPT2_MODE=box64).
 ARG INSTALL_BOX64=false
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ${JDK_PACKAGE} git curl unzip ca-certificates procps tini \
-      adb aapt \
-    && if [ "$INSTALL_BOX64" = "true" ]; then \
-         apt-get install -y --no-install-recommends cmake build-essential python3 \
-         && git clone --depth 1 https://github.com/ptitSeb/box64 /tmp/box64 \
-         && cmake -S /tmp/box64 -B /tmp/box64/build -DARM_DYNAREC=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-         && cmake --build /tmp/box64/build -j"$(nproc)" && cmake --install /tmp/box64/build \
-         && rm -rf /tmp/box64; \
-       fi \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ${JDK_PACKAGES} git curl unzip ca-certificates procps tini adb openssh-client \
+ && if [ "$INSTALL_BOX64" = "true" ]; then \
+      apt-get install -y --no-install-recommends cmake build-essential python3 \
+      && git clone --depth 1 https://github.com/ptitSeb/box64 /tmp/box64 \
+      && cmake -S /tmp/box64 -B /tmp/box64/build -DARM_DYNAREC=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      && cmake --build /tmp/box64/build -j"$(nproc)" && cmake --install /tmp/box64/build \
+      && rm -rf /tmp/box64 && apt-get purge -y cmake build-essential && apt-get autoremove -y; \
+    fi \
+ && rm -rf /var/lib/apt/lists/*
 
 # Node binary only: the runner has zero npm dependencies.
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
@@ -37,13 +42,13 @@ COPY package.json ./
 COPY src ./src
 COPY public ./public
 COPY scripts ./scripts
-RUN chmod +x scripts/*.sh
+RUN chmod +x scripts/*.sh && node --check src/server.js && node --check src/edge.js
 
-# Persist: SDK, Gradle cache, ADB RSA keys, runner data, project checkout.
 VOLUME ["/opt/android-sdk", "/root/.gradle", "/root/.android", "/data", "/workspace"]
-
 EXPOSE 3080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3080)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/opt/runner/scripts/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/opt/runner/scripts/docker-entrypoint.sh"]

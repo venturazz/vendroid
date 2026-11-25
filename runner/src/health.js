@@ -1,7 +1,7 @@
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './config.js';
+import { config, aapt2Path, bootstrapState } from './config.js';
 import { run } from './exec.js';
 
 async function freeDisk(p) {
@@ -23,13 +23,14 @@ function memAvailable() {
 
 /** Locate the aapt2 that Gradle will actually use. */
 export function resolveAapt2() {
-  if (config.aapt2Override) return { path: config.aapt2Override, source: 'AAPT2_BINARY / gradle override' };
+  const override = aapt2Path();
+  if (override) return { path: override, source: 'android.aapt2FromMavenOverride' };
   try {
     const bt = path.join(config.androidHome, 'build-tools');
     const vers = fs.readdirSync(bt).sort().reverse();
     for (const v of vers) {
       const p = path.join(bt, v, 'aapt2');
-      if (fs.existsSync(p)) return { path: p, source: `SDK build-tools ${v} (x86_64 on ARM64 - will fail without override)` };
+      if (fs.existsSync(p)) return { path: p, source: os.arch() === 'arm64' ? `SDK build-tools ${v} (x86_64 binary, no ARM64 override set)` : `SDK build-tools ${v}` };
     }
   } catch { /* no SDK */ }
   return { path: null, source: 'not found' };
@@ -66,6 +67,7 @@ export async function envHealth() {
     adb: { ok: checks.adb, version: (adbV.stdout || adbV.error || '').trim().split('\n')[0], bin: config.adbBin },
     aapt2,
     project: { path: config.projectPath, hasGradlew: projectOk, module: config.appModule },
+    sdkBootstrap: bootstrapState() || 'external',
     disk: { data: dataDisk, project: projDisk },
     memory: {
       totalGb: +(os.totalmem() / 1e9).toFixed(2),

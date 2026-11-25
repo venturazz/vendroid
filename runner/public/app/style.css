@@ -43,3 +43,21 @@ input[type=checkbox]{padding:0}
 dialog{background:var(--bg2);color:var(--fg);border:1px solid var(--bd);border-radius:8px;max-width:760px;width:90vw}
 dialog pre{max-height:60vh;overflow:auto;font-size:12px}
 @media(max-width:860px){.layout{grid-template-columns:1fr}body{height:auto}}
+a.btn{display:inline-block;text-decoration:none;color:inherit;background:#21262d;border:1px solid var(--bd);border-radius:6px;padding:6px 10px}
+a.btn:hover{background:#30363d}
+.small{font-size:12px}
+.hint{margin:0;font-size:12px;color:var(--warn)}
+kbd{background:#21262d;border:1px solid var(--bd);border-radius:4px;padding:0 4px;font-size:11px}
+.chip{font-size:10px;padding:1px 6px;border-radius:999px;margin-left:4px;vertical-align:middle}
+.chip.err{background:var(--err);color:#fff}
+.history .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.history .acts{display:flex;gap:8px}
+.history .acts a,.history .acts button{font-size:11px;padding:2px 6px}
+.history .commit{color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{font-size:10px;border:1px solid var(--bd);border-radius:4px;padding:0 4px;color:var(--mut)}
+table.kv{border-collapse:collapse;width:100%;font-size:13px;margin-bottom:8px}
+table.kv td{padding:4px 8px;border-bottom:1px solid var(--bd);vertical-align:top}
+table.kv td:first-child{white-space:nowrap;color:var(--mut)}
+.okc{color:var(--ok)}.badc{color:var(--err)}
+dialog h3{margin-top:0}
+:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
