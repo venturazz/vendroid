@@ -166,6 +166,7 @@ document.addEventListener('click', (e) => {
 
 // ---------------------------------------------------------------- keyboard
 document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented) return; // already handled (e.g. Ctrl+S inside the editor)
   const mod = e.ctrlKey || e.metaKey;
   if (!app.project || $('ide').hidden) return;
   if (document.querySelector('dialog[open]')) return;

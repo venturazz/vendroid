@@ -143,9 +143,15 @@ export function openDiff(title, diffText) {
   activate(t);
 }
 
-export async function save(t = active) {
-  if (!t || t.kind !== 'file' || !t.editor || t.readOnly) return;
+/** Saves are serialized per tab, so rapid Ctrl+S presses never race on the same base hash. */
+export function save(t = active) {
+  if (!t || t.kind !== 'file' || !t.editor || t.readOnly) return Promise.resolve();
+  t.saving = (t.saving || Promise.resolve()).then(() => doSave(t));
+  return t.saving;
+}
+async function doSave(t) {
   const content = t.editor.getValue();
+  if (content === t.saved && !t.dirty) return;
   try {
     const r = await pApi('/file', { method: 'POST', body: { path: t.path, content, baseHash: t.hash } });
     t.hash = r.hash;
@@ -158,7 +164,7 @@ export async function save(t = active) {
       const overwrite = confirm(`${t.path} was changed on disk (another tab, the AI, git or Hermes).\n\nOK = overwrite with your version\nCancel = keep the disk version (your edits stay unsaved)`);
       if (overwrite) {
         t.hash = e.data.hash;
-        return save(t);
+        return doSave(t);
       }
       return;
     }
