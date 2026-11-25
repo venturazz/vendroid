@@ -67,10 +67,16 @@ const browser = await chromium.launch();
 const page = await (await browser.newContext({ viewport: { width: 1600, height: 960 }, colorScheme: 'dark' })).newPage();
 page.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
 page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
-page.on('response', (r) => { if (r.status() >= 400 && !r.url().endsWith('/api/auth/login')) problems.push(`HTTP ${r.status()} ${r.request().method()} ${r.url().replace(base, '')}`); });
+let currentStep = '';
+page.on('response', (r) => {
+  if (r.status() >= 400 && !r.url().endsWith('/api/auth/login')) {
+    const body = (r.request().postData() || '').slice(0, 160);
+    problems.push(`HTTP ${r.status()} ${r.request().method()} ${r.url().replace(base, '')} during "${currentStep}" ${body}`);
+  }
+});
 let n = 0;
 const shot = (name) => page.screenshot({ path: path.join(OUT, `${String(++n).padStart(2, '0')}-${name}.png`) });
-const step = (s) => console.log(`[ui] ${s}`);
+const step = (s) => { currentStep = s; console.log(`[ui] ${s}`); };
 const projDir = () => path.join(ws, 'ui-test-app');
 
 try {
