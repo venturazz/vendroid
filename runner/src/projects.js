@@ -11,6 +11,12 @@ import * as git from './git.js';
 const TEMPLATES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates');
 export const TEMPLATE_IDS = ['compose', 'views'];
 
+/** Versions the templates use (shown in the New Project dialog). */
+export function templateVersions() {
+  const v = JSON.parse(fs.readFileSync(path.join(TEMPLATES, 'versions.json'), 'utf8'));
+  return { compileSdk: v.compileSdkMinor ? `${v.compileSdk}.${v.compileSdkMinor}` : String(v.compileSdk), targetSdk: v.targetSdk, agp: v.agp, gradle: v.gradle, kotlin: v.kotlin };
+}
+
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
 const readText = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
 

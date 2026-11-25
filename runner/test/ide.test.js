@@ -405,3 +405,13 @@ test('IDE assets are served (editor bundle, modules)', async () => {
   }
   assert.equal((await api('/vendor/..%2F..%2Fsrc%2Fconfig.js', { raw: true })).status, 404);
 });
+
+test('config exposes template versions (target shown in the New Project dialog)', async () => {
+  const c = (await api('/api/config')).data;
+  assert.equal(c.templateVersions.targetSdk, 37);
+  assert.equal(c.templateVersions.compileSdk, '37.2');
+  assert.equal(c.playTargetSdk, 36);
+  const p = (await api('/api/projects', { method: 'POST', body: { name: 'Newest Min', packageName: 'dev.test.newmin', minSdk: 36 } })).data;
+  assert.equal(p.minSdk, 36);
+  assert.equal(p.targetSdk, 37);
+});

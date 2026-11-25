@@ -19,6 +19,7 @@ function card(p, queue) {
   const open = () => { location.hash = `#/p/${encodeURIComponent(p.id)}`; };
   const meta = el('div', { class: 'meta' },
     el('span', { class: 'tag', text: p.android ? (p.ui === 'compose' ? 'Compose' : 'Views') : 'not Android' }),
+    p.targetSdk ? el('span', { class: `tag${p.targetSdk >= (app.cfg.playTargetSdk || 36) ? ' ok' : ''}`, title: `minSdk ${p.minSdk || '?'} · targetSdk ${p.targetSdk}`, text: `API ${p.minSdk || '?'}–${p.targetSdk}` }) : null,
     p.versionName ? el('span', { class: 'tag', text: `v${p.versionName}` }) : null,
     p.git ? el('span', { class: 'tag', text: 'git' }) : null,
     running ? el('span', { class: 'pill building', text: 'building' })
@@ -59,9 +60,16 @@ let pkgTouched = false;
 $('npName').addEventListener('input', () => { if (!pkgTouched) $('npPkg').value = suggestPkg($('npName').value); });
 $('npPkg').addEventListener('input', () => { pkgTouched = true; });
 $('hubNew').addEventListener('click', () => openNewProject());
+const ANDROID_NAMES = { 33: '13', 34: '14', 35: '15', 36: '16', 37: '17', 38: '18' };
 export function openNewProject() {
   pkgTouched = false;
   $('formNew').reset();
+  const v = app.cfg.templateVersions;
+  if (v) {
+    $('npTarget').textContent = `API ${v.compileSdk} (Android ${ANDROID_NAMES[v.targetSdk] || '?'}), target ${v.targetSdk}`;
+    $('npPlay').textContent = String(app.cfg.playTargetSdk || 36);
+    $('npStack').textContent = `Kotlin ${v.kotlin} · AGP ${v.agp} · Gradle ${v.gradle} · Jetpack Compose / Material 3, verified on this ARM64 server. A git repository is initialized with the first commit.`;
+  }
   $('npErr').textContent = '';
   $('dlgNew').showModal();
   $('npName').focus();

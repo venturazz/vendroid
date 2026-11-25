@@ -225,7 +225,7 @@ async function openProject(id) {
   $('projSwitch').hidden = false;
   $('projName').textContent = p.name;
   $('welcomeTitle').textContent = p.name;
-  $('sbPkg').textContent = p.packageName || 'no applicationId';
+  $('sbPkg').textContent = `${p.packageName || 'no applicationId'}${p.targetSdk ? ` · min ${p.minSdk || '?'} · target ${p.targetSdk}` : ''}`;
   $('task').value = pref('run:task', 'assembleDebug');
   showView(pref('view', 'explorer'));
   resetExplorer();

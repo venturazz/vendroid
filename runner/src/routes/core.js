@@ -6,6 +6,7 @@ import { envHealth } from '../health.js';
 import { HttpError, LEVELS } from '../validate.js';
 import { TEMPLATE_IDS } from '../projects.js';
 import { PLAY_TARGET_SDK } from '../play.js';
+import { templateVersions } from '../projects.js';
 
 export function register(router, { watchdog, clientIp }) {
   router.get('/healthz', (req, res) => sendJson(res, 200, { ok: true }), { public: true });
@@ -30,6 +31,7 @@ export function register(router, { watchdog, clientIp }) {
     defaultDevice: config.defaultDevice, levels: LEVELS,
     tasks: ['assembleDebug', 'assembleRelease', 'clean assembleDebug', 'bundleRelease'],
     playTargetSdk: PLAY_TARGET_SDK,
+    templateVersions: templateVersions(),
     templates: TEMPLATE_IDS,
     releaseSigning: config.signingEnabled(),
     gitTokenConfigured: !!config.gitToken,

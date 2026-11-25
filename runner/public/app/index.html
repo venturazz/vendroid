@@ -219,8 +219,27 @@
       <label class="card-radio"><input type="radio" name="tpl" value="compose" checked><b>Jetpack Compose</b><span class="muted small">Material 3, single activity, preview</span></label>
       <label class="card-radio"><input type="radio" name="tpl" value="views"><b>XML Views</b><span class="muted small">AppCompat, Material Components, ViewBinding, ConstraintLayout</span></label>
     </fieldset>
-    <label>Minimum SDK <select id="npMin"><option value="24" selected>24 (Android 7.0)</option><option value="26">26 (Android 8.0)</option><option value="28">28 (Android 9)</option><option value="29">29 (Android 10)</option><option value="31">31 (Android 12)</option><option value="33">33 (Android 13)</option></select></label>
-    <p class="muted small">Kotlin, Gradle Kotlin DSL, AGP and Gradle versions verified on this ARM64 server. A git repository is initialized with the first commit.</p>
+    <div class="sdkbox">
+      <div><b>Target &amp; compile:</b> <span id="npTarget">API 37 (Android 17)</span> <span class="tag ok">Google Play ready</span></div>
+      <div class="muted small">Your app is built for the newest Android. Google Play requires target API <span id="npPlay">36</span> or higher.</div>
+    </div>
+    <label>Oldest Android version supported (minimum SDK)
+      <select id="npMin">
+        <option value="24" selected>Android 7.0 (API 24) · almost all phones (recommended)</option>
+        <option value="26">Android 8.0 (API 26)</option>
+        <option value="28">Android 9 (API 28)</option>
+        <option value="29">Android 10 (API 29)</option>
+        <option value="30">Android 11 (API 30)</option>
+        <option value="31">Android 12 (API 31)</option>
+        <option value="33">Android 13 (API 33)</option>
+        <option value="34">Android 14 (API 34)</option>
+        <option value="35">Android 15 (API 35)</option>
+        <option value="36">Android 16 (API 36) · newest phones only</option>
+      </select>
+    </label>
+    <p class="muted small">A higher minimum lets you use newer APIs without compatibility checks, but older phones can't install the app.
+      This is not the Android version the app is built for; that is always the newest (above).</p>
+    <p class="muted small" id="npStack">Kotlin, Gradle Kotlin DSL, AGP and Gradle versions verified on this ARM64 server. A git repository is initialized with the first commit.</p>
     <p class="err" id="npErr"></p>
     <div class="row end"><button type="button" data-close>Cancel</button><button id="npCreate" class="primary" value="ok">Create</button></div>
   </form>

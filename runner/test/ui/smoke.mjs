@@ -94,6 +94,7 @@ try {
   await page.click('#hubNew');
   await page.fill('#npName', 'UI Test App');
   await page.fill('#npPkg', 'dev.ui.test');
+  if (!(await page.textContent('#npTarget')).includes('Android 17')) problems.push('dialog does not show the target Android version');
   await shot('new-project-dialog');
   await page.click('#npCreate');
   await page.waitForSelector('#ide:not([hidden])', { timeout: 20000 });

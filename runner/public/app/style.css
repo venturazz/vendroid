@@ -254,3 +254,6 @@ dialog.quick li.sel{background:#1f3a5f}
 .keycard input{width:100%}
 .keycard .fp{font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--mut)}
 .keycard .warnbox{background:#2a2110;border:1px solid #5a4410;border-radius:6px;padding:6px 8px;color:#e3b341}
+
+.sdkbox{border:1px solid var(--bd);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:3px;background:var(--bg1)}
+.tag.ok{color:var(--ok);border-color:var(--ok)}
