@@ -239,13 +239,17 @@ export const revealLine = async (path, line) => openFile(path, { line });
 // ---- quick open (Ctrl+P)
 let allFiles = [];
 let quickSel = 0;
-export async function quickOpen() {
+let filesReady = Promise.resolve();
+export function quickOpen() {
   const d = $('dlgQuick');
   $('quickInput').value = '';
   d.showModal();
   $('quickInput').focus();
-  try { allFiles = (await pApi('/files')).files; } catch (e) { toast(e.message, 'err'); allFiles = []; }
-  renderQuick();
+  filesReady = pApi('/files')
+    .then((r) => { allFiles = r.files; })
+    .catch((e) => { toast(e.message, 'err'); allFiles = []; })
+    .then(renderQuick);
+  return filesReady;
 }
 const score = (f, q) => {
   if (!q) return 1;
@@ -275,8 +279,12 @@ $('quickInput').addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowUp') { e.preventDefault(); quickSel = Math.max(0, quickSel - 1); renderQuick(); }
   else if (e.key === 'Enter') {
     e.preventDefault();
-    const p = $('quickList').children[quickSel]?.dataset.path;
-    if (p) { $('dlgQuick').close(); openFile(p); }
+    // Typed before the file list arrived: wait for it, then open the best match.
+    filesReady.then(() => {
+      renderQuick();
+      const p = $('quickList').children[quickSel]?.dataset.path;
+      if (p) { $('dlgQuick').close(); openFile(p); }
+    });
   }
 });
 
