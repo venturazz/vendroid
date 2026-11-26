@@ -35,6 +35,7 @@ function onEngineChange(save = true) {
   const p = engine();
   if (save && p) { setPref(`aiEngine:${app.project?.id}`, p.id); setPref('aiEngine', p.id); }
   $('aiModel').value = pref(`aiModel:${p?.id}`, '');
+  renderMeter();
   $('aiModel').placeholder = p?.model ? `default: ${p.model}` : 'model';
   $('aiHermes').hidden = p?.kind === 'hermes';
   $('aiInput').placeholder = p?.kind === 'hermes'
@@ -52,10 +53,60 @@ function toolRow(box, ev) {
   let row = box.querySelector(`[data-call="${CSS.escape(ev.toolCallId || '')}"]`);
   if (!row) {
     row = el('div', { class: 'toolrow', dataset: { call: ev.toolCallId || '' } },
-      el('span', { class: 'st', text: '⏳' }), el('span', { text: `${ev.emoji || '🔧'} ${ev.label || ev.tool}` }));
+      el('span', { class: 'st', text: '⏳' }), el('span', { class: 'lbl', text: `${ev.emoji || '🔧'} ${ev.label || ev.tool}` }));
     box.append(row);
   }
   if (ev.status === 'completed') { row.classList.add('done'); row.querySelector('.st').textContent = '✔'; }
+  if (ev.status === 'failed' || ev.status === 'error') { row.classList.add('done', 'fail'); row.querySelector('.st').textContent = '✖'; }
+}
+
+/** Collapsible block: summary line + body. Open while the turn runs, folded when it ends. */
+function foldBox(cls, title, open) {
+  const body = el('div', { class: 'fold-body' });
+  const sum = el('summary', { text: title });
+  const d = el('details', { class: `fold ${cls}` }, sum, body);
+  d.open = open;
+  return { d, sum, body };
+}
+function activitySummary(act, { running = false, status = '', secs } = {}) {
+  const rows = act.body.querySelectorAll('.toolrow');
+  const busy = [...rows].filter((r) => !r.classList.contains('done')).length;
+  const failed = act.body.querySelectorAll('.toolrow.fail').length;
+  const n = rows.length;
+  const parts = [running ? (busy ? `⏳ ${busy} running` : '⟳ working') : '✓ done', `${n} tool call${n === 1 ? '' : 's'}`];
+  if (failed) parts.push(`${failed} failed`);
+  if (secs !== undefined) parts.push(`${secs}s`);
+  if (status) parts.push(status);
+  act.sum.textContent = `Activity · ${parts.join(' · ')}`;
+  act.d.hidden = !n && !status && !running;
+}
+
+// ---- context meter (pane header)
+const fmtK = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k` : String(n));
+function renderMeter(u) {
+  const p = engine();
+  const m = $('aiMeter');
+  if (!p || !app.project) { m.hidden = true; return; }
+  const key = `aiUsage:${app.project.id}:${p.id}`;
+  if (u) setPref(key, u); else u = pref(key, null);
+  if (!u) { m.hidden = true; return; }
+  m.hidden = false;
+  const bar = m.querySelector('.fill');
+  const label = m.querySelector('.lbl');
+  if (u.contextTokens !== undefined) {
+    const pct = u.contextWindow ? Math.min(100, Math.round((u.contextTokens / u.contextWindow) * 100)) : null;
+    label.textContent = pct === null ? `ctx ${u.estimated ? '~' : ''}${fmtK(u.contextTokens)}` : `ctx ${pct}%`;
+    bar.style.width = `${pct ?? 0}%`;
+    m.className = `meter${pct >= 85 ? ' bad' : pct >= 60 ? ' warn' : ''}`;
+    m.title = `Context of the last request: ${u.estimated ? 'about ' : ''}${u.contextTokens.toLocaleString()} tokens`
+      + (u.contextWindow ? ` of ${u.contextWindow.toLocaleString()} (${pct}%)` : '\nSet the model\'s context window in Settings → AI providers to see a percentage')
+      + `\nOutput: ${u.outputTokens.toLocaleString()} tokens. Only the last 12 messages are sent, so old turns drop out.`;
+  } else {
+    label.textContent = `${fmtK(u.sessionInputTokens + u.sessionOutputTokens)} tok`;
+    bar.style.width = '0%';
+    m.className = 'meter';
+    m.title = `Hermes session total: ${u.sessionInputTokens.toLocaleString()} input + ${u.sessionOutputTokens.toLocaleString()} output tokens across all model calls of this chat.\nHermes does not report its current context size over the API; it compacts the conversation by itself when it gets full.`;
+  }
 }
 
 function approvalCard(ev, prov) {
@@ -142,7 +193,11 @@ function messageEl(role, content, { context, engine: eng, tools } = {}) {
   if (role === 'assistant') renderBody(content, body); else body.textContent = content;
   return el('div', { class: `msg ${role}` },
     el('div', { class: 'who', text: role === 'user' ? 'YOU' : (eng || 'ASSISTANT').toUpperCase() }),
-    tools?.length ? el('div', { class: 'tools' }, tools.map((t) => el('div', { class: 'toolrow done' }, el('span', { class: 'st', text: '✔' }), el('span', { text: `🔧 ${t.label || t.tool}` })))) : null,
+    tools?.length ? (() => {
+      const f = foldBox('activity', `Activity · ✓ ${tools.length} tool call${tools.length === 1 ? '' : 's'}`, false);
+      f.body.append(...tools.map((t) => el('div', { class: 'toolrow done' }, el('span', { class: 'st', text: '✔' }), el('span', { class: 'lbl', text: `🔧 ${t.label || t.tool}` }))));
+      return f.d;
+    })() : null,
     body,
     role === 'user' && context?.length ? el('div', { class: 'ctxlist', text: `context: ${context.join(', ')}` }) : null);
 }
@@ -243,10 +298,17 @@ async function send() {
   if (!prov) { toast('Add an AI provider in Settings first', 'err'); return; }
   const reply = messageEl('assistant', '', { engine: prov.name });
   reply.classList.add('thinking');
-  const toolsBox = el('div', { class: 'tools' });
-  const reasoning = el('div', { class: 'reasoning', hidden: true });
-  reply.insertBefore(toolsBox, reply.querySelector('.body'));
-  reply.insertBefore(reasoning, toolsBox);
+  const think = foldBox('reasoning', '💭 Thinking…', true);
+  think.d.hidden = true;
+  const act = foldBox('activity', '', true);
+  const toolsBox = act.body;
+  const reasoning = think.body;
+  reply.insertBefore(act.d, reply.querySelector('.body'));
+  reply.insertBefore(think.d, act.d);
+  const t0 = Date.now();
+  let statusText = '';
+  activitySummary(act, { running: true });
+  app.aiRunning = true;
   box.append(reply);
   box.scrollTop = box.scrollHeight;
   $('aiInput').value = '';
@@ -271,21 +333,26 @@ async function send() {
           box.scrollTop = box.scrollHeight;
         }
       } else if (ev === 'reasoning') {
-        reasoning.hidden = false;
+        think.d.hidden = false;
         reasoning.textContent += data.text;
         reasoning.scrollTop = reasoning.scrollHeight;
       } else if (ev === 'tool') {
         toolRow(toolsBox, data);
+        activitySummary(act, { running: true, status: statusText });
         box.scrollTop = box.scrollHeight;
         if (data.status === 'completed') { emit('files-changed'); emit('fs-changed'); }
       } else if (ev === 'approval') {
-        toolsBox.append(approvalCard(data, prov));
+        reply.insertBefore(approvalCard(data, prov), bodyEl); // outside the fold: never hidden
         box.scrollTop = box.scrollHeight;
         notify('Hermes needs your approval', data.description || data.tool || '');
       } else if (ev === 'status' && data.error) {
         reply.append(el('div', { class: 'err', text: `⚠ ${data.error}` }));
+      } else if (ev === 'status') {
+        statusText = String(data.message || data.status || data.text || '').slice(0, 80);
+        activitySummary(act, { running: true, status: statusText });
       } else if (ev === 'done') {
         renderBody(data.message, bodyEl);
+        if (data.usage) renderMeter({ ...data.usage, contextWindow: data.contextWindow || undefined });
         if (data.proposal?.files?.length || data.proposal?.errors?.length) reply.append(proposalEl(data.proposal));
         if (data.engine === 'hermes') { emit('files-changed'); emit('fs-changed'); }
       } else if (ev === 'error') {
@@ -298,7 +365,12 @@ async function send() {
       reply.append(el('div', { class: 'err', text: `⚠ ${e.message}` }));
     }
   } finally {
+    app.aiRunning = false;
     reply.classList.remove('thinking');
+    activitySummary(act, { running: false, secs: Math.round((Date.now() - t0) / 1000) });
+    act.d.open = false;
+    think.d.open = false;
+    think.sum.textContent = '💭 Thinking';
     sending = null;
     $('aiSend').textContent = 'Send';
     $('aiWithBuild').checked = false;
@@ -306,6 +378,8 @@ async function send() {
   }
 }
 $('aiSend').addEventListener('click', () => (sending ? sending.abort() : send()));
+$('aiFollow').checked = pref('aiFollow', true);
+$('aiFollow').addEventListener('change', () => setPref('aiFollow', $('aiFollow').checked));
 $('aiInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });

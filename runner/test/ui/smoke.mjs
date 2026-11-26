@@ -120,6 +120,27 @@ try {
   await page.keyboard.press('Control+s');
   await page.waitForSelector('.tab.active:not(.dirty)');
   if (!fs.readFileSync(path.join(projDir(), 'app/src/main/java/dev/ui/test/MainActivity.kt'), 'utf8').includes('// edited in the browser')) problems.push('save did not reach disk');
+  await page.waitForSelector('#sbSave.ok:has-text("Saved")');
+  if (await page.isDisabled('#edSave') !== true) problems.push('Save button enabled on a clean file');
+
+  step('autosave: typing saves by itself');
+  await page.click('.cm-content');
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('// autosaved\n');
+  await page.waitForSelector('#sbSave.dirty');
+  await page.waitForSelector('#sbSave.ok', { timeout: 5000 });
+  if (!fs.readFileSync(path.join(projDir(), 'app/src/main/java/dev/ui/test/MainActivity.kt'), 'utf8').includes('// autosaved')) problems.push('autosave did not reach disk');
+
+  step('live: a change made outside the editor (like Hermes over MCP) shows up without reload');
+  await page.evaluate(async () => {
+    const p = '/api/projects/ui-test-app/file';
+    const f = await (await fetch(`${p}?path=app/src/main/java/dev/ui/test/MainActivity.kt`)).json();
+    await fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: 'app/src/main/java/dev/ui/test/MainActivity.kt', content: `${f.content}// written by the agent\n` }) });
+  });
+  await page.waitForFunction(() => document.querySelector('.ed:not([hidden]) .cm-content')?.textContent.includes('// written by the agent'), null, { timeout: 5000 })
+    .catch(() => { throw new Error('editor did not pick up the outside change'); });
+  if (await page.$('.tab.active.dirty')) problems.push('tab dirty after outside change');
+  await page.waitForSelector('#tree .node[data-path="app"]');
 
   step('open XML + Gradle files (highlighting)');
   await page.click('#tree .node[data-path="app"]').catch(() => {});
@@ -157,6 +178,7 @@ try {
   await page.fill('#aiInput', 'Make the counter text friendlier');
   await page.keyboard.press('Enter');
   await page.waitForSelector('.proposal .pfh:has-text("MainActivity.kt")', { timeout: 15000 });
+  await page.waitForSelector('#aiMeter:not([hidden])');
   await shot('ai-proposal');
   await page.click('.proposal button:has-text("Apply all")');
   await page.waitForSelector('.proposal button:has-text("Undo"):not([hidden])');
@@ -196,6 +218,13 @@ try {
   await page.waitForSelector('#bState.succeeded');
   await page.waitForSelector('#bLog div:has-text("Events injected")');
   await shot('build-output');
+
+  step('live: a build started elsewhere (agent/webhook) takes over the build panel');
+  const extId = await page.evaluate(async () => (await (await fetch('/api/projects/ui-test-app/builds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'assembleDebug' }) })).json()).id);
+  await page.waitForFunction((id) => document.querySelector('#buildSel').value === id, extId, { timeout: 10000 })
+    .catch(() => { throw new Error('build panel did not follow the new build'); });
+  await page.waitForSelector('#bState.succeeded', { timeout: 30000 });
+  await page.waitForSelector('#bLog div:has-text("BUILD SUCCESSFUL")', { timeout: 10000 }).catch(() => problems.push('new build log not streamed'));
 
   step('device screenshot');
   await page.click('.bottom-tabs [data-btab=device]');

@@ -72,7 +72,7 @@ function renderTabs() {
   bar.textContent = '';
   for (const t of tabs) {
     const tabEl = el('div', {
-      class: `tab${t === active ? ' active' : ''}${t.dirty ? ' dirty' : ''}`, title: t.path || t.title, role: 'tab',
+      class: `tab${t === active ? ' active' : ''}${t.dirty ? ' dirty' : ''}${t.ext ? ' ext' : ''}`, title: t.ext ? `${t.path} (changed by ${t.ext})` : t.path || t.title, role: 'tab',
       onclick: () => activate(t),
       onauxclick: (e) => { if (e.button === 1) close(t); },
     },
@@ -81,13 +81,16 @@ function renderTabs() {
     bar.append(tabEl);
   }
   $('welcome').hidden = tabs.length > 0;
+  $('tabsbar').hidden = tabs.length === 0;
   tabEl()?.scrollIntoView({ inline: 'nearest' });
+  renderSaveState();
   setPref(`tabs:${app.project?.id}`, { open: openTabs(), active: activeFile() });
 }
 const tabEl = () => $('tabs').querySelector('.tab.active');
 
 function activate(t) {
   active = t;
+  t.ext = null;
   for (const x of tabs) x.pane.hidden = x !== t;
   renderTabs();
   t.editor?.focus?.();
@@ -116,6 +119,7 @@ export async function openFile(path, { line, preview = false } = {}) {
           if (t.reloading) return;
           const d = v !== t.saved;
           if (d !== t.dirty) { t.dirty = d; renderTabs(); }
+          if (d) scheduleAutosave(t);
         },
         onSave: () => save(t),
         onCursor: (ln, col) => { if (t === active) $('sbCursor').textContent = `Ln ${ln}, Col ${col}`; },
@@ -168,32 +172,78 @@ export function openDiff(title, diffText) {
 }
 
 /** Saves are serialized per tab, so rapid Ctrl+S presses never race on the same base hash. */
-export function save(t = active) {
+export function save(t = active, { auto = false } = {}) {
   if (!t || t.kind !== 'file' || !t.editor || t.readOnly) return Promise.resolve();
-  t.saving = (t.saving || Promise.resolve()).then(() => doSave(t));
+  clearTimeout(t.autoTimer);
+  t.saving = (t.saving || Promise.resolve()).then(() => doSave(t, auto));
   return t.saving;
 }
-async function doSave(t) {
+export const autosaveOn = () => pref('autosave', true);
+function scheduleAutosave(t) {
+  if (!autosaveOn() || t.saveError === 'conflict') return;
+  clearTimeout(t.autoTimer);
+  t.autoTimer = setTimeout(() => { if (tabs.includes(t) && t.dirty) save(t, { auto: true }); }, 1200);
+}
+async function doSave(t, auto = false) {
   const content = t.editor.getValue();
   if (content === t.saved && !t.dirty) return;
+  t.inflight = content;
+  t.saveState = 'saving';
+  renderSaveState();
   try {
     const r = await pApi('/file', { method: 'POST', body: { path: t.path, content, baseHash: t.hash } });
     t.hash = r.hash;
     t.saved = content;
+    t.savedAt = new Date();
+    t.saveError = null;
     t.dirty = t.editor.getValue() !== content;
     renderTabs();
     emit('saved', t.path);
   } catch (e) {
     if (e instanceof ApiError && e.status === 409 && e.data?.conflict) {
-      const overwrite = confirm(`${t.path} was changed on disk (another tab, the AI, git or Hermes).\n\nOK = overwrite with your version\nCancel = keep the disk version (your edits stay unsaved)`);
+      if (auto) { // never pop a dialog while typing: show it in the status bar, the user decides on Save
+        t.saveError = 'conflict';
+        toast(`${t.path} was changed on disk (AI, git or another tab). Press Save to choose which version to keep.`, 'err');
+        return;
+      }
+      t.saveError = null;
+      const overwrite = confirm(`${t.path} was changed on disk (another tab, the AI, git or Hermes).\n\nOK = overwrite with your version\nCancel = load the disk version (Ctrl+Z in the editor brings your edits back)`);
       if (overwrite) {
         t.hash = e.data.hash;
         return doSave(t);
       }
-      return;
+      return reloadFromDisk([t.path], { discard: true });
     }
+    t.saveError = e.message;
     toast(`Save failed: ${e.message}`, 'err');
+  } finally {
+    t.inflight = undefined;
+    t.saveState = null;
+    renderSaveState();
   }
+}
+
+/** Status bar + toolbar: is the active file saved? */
+export function renderSaveState() {
+  const sb = $('sbSave');
+  const btn = $('edSave');
+  const t = active;
+  const editable = t && t.kind === 'file' && t.editor && !t.readOnly;
+  const others = tabs.filter((x) => x !== t && x.dirty).length;
+  sb.hidden = !editable;
+  btn.disabled = !editable || (!t.dirty && !t.saveError);
+  if (!editable) return;
+  const time = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  let text;
+  let cls;
+  if (t.saveState === 'saving') { text = '⟳ Saving…'; cls = 'saving'; }
+  else if (t.saveError === 'conflict') { text = '⚠ Changed on disk: Save to resolve'; cls = 'bad'; }
+  else if (t.saveError) { text = '⚠ Not saved: click to retry'; cls = 'bad'; }
+  else if (t.dirty) { text = autosaveOn() ? '● Unsaved (autosave…)' : '● Unsaved: Ctrl+S'; cls = 'dirty'; }
+  else { text = t.savedAt ? `✓ Saved ${time(t.savedAt)}` : '✓ Saved'; cls = 'ok'; }
+  sb.textContent = others ? `${text} · ${others} other unsaved` : text;
+  sb.className = `sbsave ${cls}`;
+  sb.title = `${t.path}${t.hash ? `\nDisk version ${t.hash.slice(0, 8)}` : ''}\nClick to save now`;
 }
 export async function saveAll() {
   for (const t of tabs.filter((x) => x.dirty)) await save(t);
@@ -230,7 +280,7 @@ export function renameTab(from, to) {
 }
 
 /** Re-read open files changed on disk (AI apply, git pull, Hermes). Dirty tabs are left alone. */
-export async function reloadFromDisk(paths) {
+export async function reloadFromDisk(paths, { discard = false, source = null } = {}) {
   for (const t of tabs.filter((x) => x.kind === 'file' && x.editor && (!paths || paths.includes(x.path)))) {
     // Only the newest reload of a tab may apply: an older, slower response must not overwrite newer content.
     const gen = (t.reloadGen = (t.reloadGen || 0) + 1);
@@ -238,18 +288,52 @@ export async function reloadFromDisk(paths) {
     try { f = await pApi(`/file?path=${encodeURIComponent(t.path)}`); } catch { if (gen === t.reloadGen) close(t, { force: true }); continue; }
     if (gen !== t.reloadGen || !tabs.includes(t)) continue;
     if (f.content === undefined) continue;
+    if (t.inflight !== undefined && f.content === t.inflight) continue; // our own save echoing back
     const current = t.editor.getValue();
-    if (current === f.content) { t.hash = f.hash; t.saved = f.content; t.dirty = false; continue; }
-    if (t.dirty && current !== t.saved) { toast(`${t.path} changed on disk; your unsaved edits were kept`, 'err'); continue; }
+    if (current === f.content) { t.hash = f.hash; t.saved = f.content; t.dirty = false; t.saveError = null; continue; }
+    if (!discard && t.dirty && current !== t.saved) {
+      if (t.saveError !== 'conflict') toast(`${t.path} changed on disk; your unsaved edits were kept`, 'err');
+      t.saveError = 'conflict';
+      continue;
+    }
+    clearTimeout(t.autoTimer);
     t.reloading = true;
-    t.editor.setValue(f.content);
+    const range = applyText(t, f.content);
     t.reloading = false;
     t.hash = f.hash;
     t.saved = f.content;
     t.dirty = false;
+    t.saveError = null;
+    t.savedAt = new Date();
+    if (t !== active) t.ext = source || 'another tool';
+    if (range) t.editor.flash?.(range.from, range.to, { scroll: t === active && following() });
   }
   renderTabs();
 }
+
+/** Replace only the changed middle of the document, so cursor, scroll and undo history survive. */
+function applyText(t, text) {
+  const cur = t.editor.getValue();
+  const max = Math.min(cur.length, text.length);
+  let a = 0;
+  while (a < max && cur.charCodeAt(a) === text.charCodeAt(a)) a++;
+  let b = 0;
+  while (b < max - a && cur.charCodeAt(cur.length - 1 - b) === text.charCodeAt(text.length - 1 - b)) b++;
+  const insert = text.slice(a, text.length - b);
+  if (t.editor.view) t.editor.view.dispatch({ changes: { from: a, to: cur.length - b, insert } });
+  else t.editor.setValue(text);
+  return { from: a, to: a + insert.length };
+}
+
+// ---- follow AI edits: while the assistant runs, open the file it changes and show the change
+const TEXT_EXT = /\.(kt|kts|java|xml|gradle|json|md|properties|pro|toml|ya?ml|txt|html?|css|js|ts|sh)$/i;
+const following = () => !!app.aiRunning && pref('aiFollow', true);
+on('files-live', ({ paths, kinds }) => {
+  if (!following() || !paths || paths.length !== 1 || !TEXT_EXT.test(paths[0])) return;
+  if (!kinds.every((k) => k === 'write' || k === 'create')) return;
+  if (paths[0] === activeFile()) return;
+  openFile(paths[0]).then((t) => { if (t) { t.ext = null; renderTabs(); } }).catch(() => {});
+});
 
 export async function restoreTabs() {
   const s = pref(`tabs:${app.project.id}`, null);
@@ -321,4 +405,12 @@ $('quickInput').addEventListener('keydown', (e) => {
 window.addEventListener('beforeunload', (e) => {
   if (isDirty()) { e.preventDefault(); e.returnValue = ''; }
 });
-on('files-changed', (paths) => reloadFromDisk(paths));
+on('files-changed', (paths) => reloadFromDisk(paths, { source: app.aiRunning ? 'AI' : null }));
+$('sbSave').addEventListener('click', () => save());
+$('edSave').addEventListener('click', () => save());
+$('edAutosave').checked = autosaveOn();
+$('edAutosave').addEventListener('change', () => {
+  setPref('autosave', $('edAutosave').checked);
+  if ($('edAutosave').checked) for (const t of tabs) if (t.dirty) scheduleAutosave(t);
+  renderSaveState();
+});

@@ -43,7 +43,7 @@ const writeStore = (list) => fs.writeFileSync(file(), JSON.stringify(list, null,
 function builtins() {
   const out = [];
   if (config.nineRouterUrl) {
-    out.push({ id: '9router', name: '9Router', kind: 'openai', baseUrl: config.nineRouterUrl, model: config.nineRouterModel, builtin: true, apiKey: config.nineRouterApiKey });
+    out.push({ id: '9router', name: '9Router', kind: 'openai', baseUrl: config.nineRouterUrl, model: config.nineRouterModel, contextWindow: config.nineRouterContext, builtin: true, apiKey: config.nineRouterApiKey });
   }
   if (config.hermesApiUrl) {
     out.push({ id: 'hermes', name: 'Hermes Agent', kind: 'hermes', baseUrl: config.hermesApiUrl, model: config.hermesApiModel, builtin: true, apiKey: config.hermesApiKey });
@@ -67,13 +67,17 @@ export function resolve(id) {
   return p;
 }
 
-function validate({ name, kind, baseUrl, model }) {
+const ctxWindow = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
+
+function validate({ name, kind, baseUrl, model, contextWindow }) {
   if (typeof name !== 'string' || !name.trim() || name.length > 40) throw bad('name: 1-40 characters');
   if (!KINDS.includes(kind)) throw bad(`kind must be one of ${KINDS.join(', ')}`);
   let u;
   try { u = new URL(baseUrl); } catch { throw bad('baseUrl must be a URL like https://api.openai.com/v1'); }
   if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) throw bad('baseUrl must be http(s) without credentials');
   if (model !== undefined && model !== null && (typeof model !== 'string' || model.length > 200)) throw bad('model must be a string');
+  const cw = ctxWindow(contextWindow);
+  if (cw !== null && (!Number.isInteger(cw) || cw < 1000 || cw > 10_000_000)) throw bad('contextWindow: tokens between 1000 and 10000000');
 }
 
 export function add(body) {
@@ -84,7 +88,7 @@ export function add(body) {
   for (let i = 2; [...builtins(), ...store].some((p) => p.id === id); i++) id = `${base}-${i}`;
   const rec = {
     id, name: body.name.trim(), kind: body.kind, baseUrl: body.baseUrl.replace(/\/+$/, ''),
-    model: (body.model || '').trim() || null, keyEnc: encrypt(body.apiKey || ''), createdAt: new Date().toISOString(),
+    model: (body.model || '').trim() || null, contextWindow: ctxWindow(body.contextWindow), keyEnc: encrypt(body.apiKey || ''), createdAt: new Date().toISOString(),
   };
   store.push(rec);
   writeStore(store);
@@ -95,7 +99,7 @@ export function update(id, body) {
   const store = readStore();
   const i = store.findIndex((p) => p.id === id);
   if (i < 0) throw new HttpError(builtins().some((b) => b.id === id) ? 409 : 404, builtins().some((b) => b.id === id) ? 'Built-in providers are set by environment variables' : 'Unknown provider');
-  const next = { ...store[i], ...(body.name !== undefined ? { name: body.name } : {}), ...(body.baseUrl !== undefined ? { baseUrl: body.baseUrl.replace(/\/+$/, '') } : {}), ...(body.model !== undefined ? { model: body.model || null } : {}), ...(body.kind !== undefined ? { kind: body.kind } : {}) };
+  const next = { ...store[i], ...(body.name !== undefined ? { name: body.name } : {}), ...(body.baseUrl !== undefined ? { baseUrl: body.baseUrl.replace(/\/+$/, '') } : {}), ...(body.model !== undefined ? { model: body.model || null } : {}), ...(body.kind !== undefined ? { kind: body.kind } : {}), ...(body.contextWindow !== undefined ? { contextWindow: ctxWindow(body.contextWindow) } : {}) };
   validate(next);
   if (body.apiKey !== undefined) next.keyEnc = encrypt(body.apiKey || '');
   store[i] = next;

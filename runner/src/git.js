@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { childEnv, run } from './exec.js';
 import { HttpError, bad, isBranch, isRelPath } from './validate.js';
+import { filesChanged } from './events.js';
 
 const ASKPASS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'git-askpass.sh');
 
@@ -142,6 +143,7 @@ export async function log(dir, n = 30) {
 
 export async function pull(dir) {
   const r = await must(dir, ['pull', '--ff-only'], { timeoutMs: 5 * 60_000 });
+  filesChanged(dir, null, 'git');
   return { ok: true, message: r.message };
 }
 
@@ -164,6 +166,7 @@ export async function branches(dir) {
 export async function checkout(dir, { branch, create = false }) {
   if (!isBranch(branch)) throw bad('Invalid branch name');
   await must(dir, create ? ['switch', '-c', branch] : ['switch', branch]);
+  filesChanged(dir, null, 'git');
   return status(dir);
 }
 
@@ -175,5 +178,6 @@ export async function discard(dir, rel) {
   if (!f) return { ok: true };
   if (f.status === 'untracked') fs.rmSync(path.join(dir, rel), { force: true });
   else await must(dir, ['restore', '--staged', '--worktree', '--source=HEAD', '--', rel]);
+  filesChanged(dir, [rel], 'git');
   return { ok: true };
 }

@@ -8,6 +8,7 @@ import { loadAi, toggleAi, restoreDraft } from './ai.js';
 import { refreshBuilds, startBuild, cancelBuild, resetBottom, toggleBottom } from './bottom.js';
 import { openSettings } from './settings.js';
 import { refreshPublish } from './publish.js';
+import { connectLive, disconnectLive } from './live.js';
 
 // ---------------------------------------------------------------- top bar status
 function badge(node, text, cls, title) {
@@ -196,6 +197,7 @@ document.addEventListener('keydown', (e) => {
 async function showHub() {
   if (app.project && isDirty() && !confirm('You have unsaved changes. Leave the project anyway?')) { location.hash = `#/p/${encodeURIComponent(app.project.id)}`; return; }
   if (app.project) closeAll({ force: true });
+  disconnectLive();
   app.project = null;
   $('ide').hidden = true;
   $('statusbar').hidden = true;
@@ -217,6 +219,7 @@ async function openProject(id) {
   }
   if (app.project) closeAll({ force: true });
   app.project = p;
+  connectLive(p.id);
   document.title = `${p.name} · Vendroid`;
   $('hub').hidden = true;
   $('ide').hidden = false;
@@ -253,7 +256,7 @@ window.addEventListener('hashchange', route);
   setInterval(refreshDevices, 10_000);
   setInterval(refreshAi, 30_000);
   setInterval(refreshEnv, 60_000);
-  setInterval(() => { if (!document.hidden && app.project) refreshBuilds(); }, 4_000);
+  setInterval(() => { if (!document.hidden && app.project) refreshBuilds(); }, 10_000); // live.js pushes changes; this is the fallback
   setInterval(() => { if (!document.hidden && app.project) refreshGit(); }, 15_000);
   setInterval(() => { if (!document.hidden && !app.project) refreshHub(); }, 10_000);
 })();

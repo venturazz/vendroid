@@ -648,3 +648,55 @@ test('MCP annotations: side-effect tools are not read-only; destructive ones are
   for (const n of ['list_projects', 'read_file', 'logcat', 'screenshot', 'get_build']) assert.equal(ann[n].readOnlyHint, true, n);
   for (const n of ['delete_project', 'delete_file', 'git_push']) assert.equal(ann[n].destructiveHint, true, n);
 });
+
+test('live events: file changes from the IDE and MCP, and build states, reach the project stream', async () => {
+  const P = '/api/projects/hello-views';
+  const ac = new AbortController();
+  const r = await fetch(`${ctx.base}${P}/events`, { headers: { Cookie: ctx.cookie }, signal: ac.signal });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /event-stream/);
+  const events = [];
+  (async () => {
+    const dec = new TextDecoder();
+    let buf = '';
+    try {
+      for await (const c of r.body) {
+        buf += dec.decode(c, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const ev = /^event: (.+)$/m.exec(frame)?.[1];
+          const data = /^data: (.+)$/m.exec(frame)?.[1];
+          if (ev) events.push({ ev, data: data ? JSON.parse(data) : null });
+        }
+      }
+    } catch { /* aborted */ }
+  })();
+  const waitFor = async (pred, what) => {
+    for (let i = 0; i < 100; i++) { const e = events.find(pred); if (e) return e; await sleep(50); }
+    throw new Error(`no ${what} event; got ${JSON.stringify(events)}`);
+  };
+  await waitFor((e) => e.ev === 'hello', 'hello');
+
+  await api(`${P}/file`, { method: 'POST', body: { path: 'notes/live.txt', content: 'one' } });
+  const created = await waitFor((e) => e.ev === 'files' && e.data.paths?.includes('notes/live.txt'), 'files (IDE)');
+  assert.deepEqual(created.data.kinds, ['create']);
+
+  const T = (await api('/api/agent/info')).data.token;
+  const w = (await api('/mcp', { method: 'POST', token: T, body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'write_file', arguments: { project: 'hello-views', path: 'notes/live.txt', content: 'two' } } } })).data.result;
+  assert.ok(!w.isError, w.content?.[0]?.text);
+  await waitFor((e) => e.ev === 'files' && e.data.kinds.includes('write') && e.data.paths?.includes('notes/live.txt'), 'files (MCP)');
+
+  // other projects' changes are not sent
+  await api('/api/projects/hello-compose/file', { method: 'POST', body: { path: 'notes/other.txt', content: 'x' } });
+  await sleep(300);
+  assert.ok(!events.some((e) => e.ev === 'files' && e.data.paths?.includes('notes/other.txt')), 'no cross-project events');
+
+  useFakeGradle('hello-views');
+  const b = (await api(`${P}/builds`, { method: 'POST', body: { task: 'assembleDebug' } })).data;
+  await waitBuild(b.id);
+  await waitFor((e) => e.ev === 'build' && e.data.id === b.id && e.data.state === 'queued', 'build queued');
+  await waitFor((e) => e.ev === 'build' && e.data.id === b.id && e.data.state === 'succeeded', 'build succeeded');
+  ac.abort();
+});

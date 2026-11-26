@@ -13,6 +13,7 @@ import { childEnv, lineSplitter, killGroup, run } from './exec.js';
 import * as adbm from './adb.js';
 import { notifyHermes, sliceBuildError } from './ai.js';
 import { HttpError, TASKS, bad, isBuildId, isPackage, isSerial, isTask } from './validate.js';
+import { buildChanged, filesChanged } from './events.js';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const ASKPASS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'git-askpass.sh');
@@ -190,7 +191,9 @@ export class BuildManager {
   }
   #emitState(b) {
     const s = this.bufs.get(b.id);
-    if (s) for (const sub of s.subs) sub.onState(this.view(b));
+    const v = this.view(b);
+    if (s) for (const sub of s.subs) sub.onState(v);
+    buildChanged(v);
   }
 
   /** Replay lines newer than `afterN`, then follow live. Returns an unsubscribe function. */
@@ -280,6 +283,7 @@ export class BuildManager {
         ], { env: { ...env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: ASKPASS, VENDROID_GIT_TOKEN: config.gitToken }, timeoutMs: 5 * 60_000 });
         check();
         if (code !== 0) throw new Error(`git pull exited with ${code}`);
+        filesChanged(root, null, 'git');
       }
 
       b.commit = await this.#commitInfo(root, env);

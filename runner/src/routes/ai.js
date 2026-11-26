@@ -75,7 +75,7 @@ export function register(router, { builds, projects }) {
       const out = prov.kind === 'hermes'
         ? await hermes.chat(p, opts, prov, (type, data) => send(type, data), ac.signal)
         : await aicode.chat(p, opts, (d) => send('delta', { text: d }), ac.signal, prov);
-      send('done', { ...out, engine: prov.kind });
+      send('done', { ...out, engine: prov.kind, contextWindow: prov.contextWindow || null });
     } catch (e) {
       if (!ac.signal.aborted) send('error', { message: e.message });
     } finally {

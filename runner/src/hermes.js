@@ -81,6 +81,7 @@ export async function chat(p, opts, prov, onEvent, signal) {
   if (sid) writeSession(p.id, { sessionId: sid, providerId: prov.id, at: new Date().toISOString() });
 
   let text = '';
+  let usage = null;
   const tools = [];
   const dec = new TextDecoder();
   let buf = '';
@@ -96,6 +97,7 @@ export async function chat(p, opts, prov, onEvent, signal) {
     } else if (event === 'hermes.status') {
       onEvent('status', j);
     } else {
+      if (j.usage) usage = j.usage;
       const d = j.choices?.[0]?.delta || {};
       if (d.reasoning_content) onEvent('reasoning', { text: d.reasoning_content });
       if (d.content) { text += d.content; onEvent('delta', { text: d.content }); }
@@ -105,6 +107,7 @@ export async function chat(p, opts, prov, onEvent, signal) {
   if (!(res.headers['content-type'] || '').includes('event-stream')) {
     let j = {};
     try { j = JSON.parse(await readAll(res)); } catch { /* not JSON */ }
+    if (j.usage) usage = j.usage;
     text = j.choices?.[0]?.message?.content || '';
     if (text) onEvent('delta', { text });
   } else {
@@ -130,7 +133,11 @@ export async function chat(p, opts, prov, onEvent, signal) {
   history.push({ role: 'user', content: opts.message, at: now, context: [opts.activeFile, ...(opts.contextFiles || [])].filter(Boolean) });
   history.push({ role: 'assistant', content: text, at: now, engine: prov.name, tools });
   saveHistory(p.id, history);
-  return { message: text, sessionId: sid || sess.sessionId || null, tools };
+  // Hermes reports the session's cumulative tokens (all model calls of the chat), not the current
+  // context size, so the IDE shows them as usage, not as a context percentage.
+  const u = usage ? { sessionInputTokens: usage.prompt_tokens || 0, sessionOutputTokens: usage.completion_tokens || 0 } : null;
+  if (u && (sid || sess.sessionId)) writeSession(p.id, { ...readSession(p.id), usage: u });
+  return { message: text, sessionId: sid || sess.sessionId || null, tools, usage: u };
 }
 
 /** Forward an approval decision (from the IDE's Approve/Deny buttons) to Hermes. */

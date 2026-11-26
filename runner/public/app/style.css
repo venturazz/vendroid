@@ -273,6 +273,33 @@ dialog.quick li.sel{background:#1f3a5f}
 .toolrow.done{opacity:.6}.toolrow .st{width:14px;text-align:center}
 .approval{border:1px solid var(--warn);border-radius:8px;padding:8px;background:#2a2110;display:flex;flex-direction:column;gap:6px;font-size:12px}
 .approval .row button{font-size:12px}
-.reasoning{font-size:12px;color:var(--mut);border-left:2px solid var(--bd);padding-left:8px;white-space:pre-wrap;max-height:120px;overflow:auto}
 .provform{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 .tag.hermes{color:var(--acc2);border-color:var(--acc2)}
+
+/* ---- editor toolbar + save state */
+.tabsbar{display:flex;align-items:stretch;background:var(--bg1);border-bottom:1px solid var(--bd);flex:none;min-height:33px}
+.tabsbar .tabs{flex:1;min-width:0;border-bottom:0}
+.ed-actions{display:flex;align-items:center;gap:8px;padding:0 8px;border-left:1px solid var(--bd);flex:none}
+.ed-actions button{padding:2px 9px}
+.tab.ext{color:var(--acc2)}
+.tab.ext::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--acc2);margin-left:2px}
+.sbsave{background:transparent;border:0;border-radius:4px;color:inherit;padding:0 6px;font-size:12px}
+.sbsave:hover{background:#ffffff1a}
+.sbsave.dirty{color:#ffd58a}.sbsave.bad{color:#ffb4ae;font-weight:600}.sbsave.saving{opacity:.8}
+.cm-flash{background:#a371f733;transition:background 1.2s}
+.cm-flash-line{background:#a371f722!important}
+
+/* ---- AI activity (collapsible) + context meter */
+.fold{border:1px solid var(--bd);border-radius:7px;background:var(--bg)}
+.fold>summary{cursor:pointer;padding:4px 8px;font-size:12px;color:var(--mut);list-style:none;user-select:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fold>summary::-webkit-details-marker{display:none}
+.fold>summary::before{content:"▸ ";display:inline-block;width:12px}
+.fold[open]>summary::before{content:"▾ "}
+.fold-body{padding:2px 8px 6px;display:flex;flex-direction:column;gap:2px;max-height:240px;overflow:auto}
+.fold.reasoning .fold-body{display:block;white-space:pre-wrap;font-size:12px;color:var(--mut)}
+.toolrow .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toolrow.fail{color:var(--err);opacity:1}
+.meter{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--mut);margin-right:4px;cursor:default;letter-spacing:0}
+.meter .track{width:46px;height:5px;border-radius:3px;background:var(--bg3);overflow:hidden;display:inline-block}
+.meter .fill{display:block;height:100%;width:0;background:var(--acc)}
+.meter.warn .fill{background:var(--warn)}.meter.bad .fill{background:var(--err)}.meter.bad{color:var(--err)}

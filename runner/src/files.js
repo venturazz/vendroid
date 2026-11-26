@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HttpError, bad, isRelPath } from './validate.js';
+import { filesChanged } from './events.js';
 
 export const MAX_READ = 2 * 1024 * 1024;
 export const MAX_WRITE = 5 * 1024 * 1024;
@@ -114,7 +115,9 @@ export function write(root, rel, content, { baseHash, create = false } = {}) {
   const mode = exists ? fs.statSync(abs).mode & 0o777 : 0o644;
   fs.writeFileSync(tmp, content, { mode });
   fs.renameSync(tmp, abs);
-  return { path: rel, hash: sha1(Buffer.from(content)), size: Buffer.byteLength(content), created: !exists };
+  const hash = sha1(Buffer.from(content));
+  filesChanged(root, [rel], exists ? 'write' : 'create');
+  return { path: rel, hash, size: Buffer.byteLength(content), created: !exists };
 }
 
 /** Raw bytes of any file (images, sounds, fonts …) up to MAX_BINARY. */
@@ -144,6 +147,7 @@ export function writeBytes(root, rel, buf, { baseHash, create = false } = {}) {
   const tmp = `${abs}.vendroid-${process.pid}-${Date.now()}.tmp`;
   fs.writeFileSync(tmp, buf, { mode: exists ? fs.statSync(abs).mode & 0o777 : 0o644 });
   fs.renameSync(tmp, abs);
+  filesChanged(root, [rel], exists ? 'write' : 'create');
   return { path: rel, hash: sha1(buf), size: buf.length, created: !exists };
 }
 
@@ -151,6 +155,7 @@ export function mkdir(root, rel) {
   const abs = resolve(root, rel);
   if (fs.existsSync(abs)) throw new HttpError(409, `${rel} already exists`);
   fs.mkdirSync(abs, { recursive: true });
+  filesChanged(root, [rel], 'create');
   return { path: rel };
 }
 
@@ -161,6 +166,7 @@ export function rename(root, from, to) {
   if (fs.existsSync(b)) throw new HttpError(409, `${to} already exists`);
   fs.mkdirSync(path.dirname(b), { recursive: true });
   fs.renameSync(a, b);
+  filesChanged(root, [from, to], 'rename');
   return { from, to };
 }
 
@@ -169,6 +175,7 @@ export function remove(root, rel) {
   if (!fs.existsSync(abs)) throw new HttpError(404, `${rel} not found`);
   if (fs.realpathSync(abs) === fs.realpathSync(root)) throw bad('Refusing to delete the project root');
   fs.rmSync(abs, { recursive: true, force: true });
+  filesChanged(root, [rel], 'delete');
   return { path: rel };
 }
 

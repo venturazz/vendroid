@@ -102,7 +102,13 @@
 
   <section class="center">
     <div class="editor-area">
-      <div id="tabs" class="tabs" role="tablist"></div>
+      <div id="tabsbar" class="tabsbar" hidden>
+        <div id="tabs" class="tabs" role="tablist"></div>
+        <div class="ed-actions">
+          <label class="chk small" title="Save automatically 1 s after you stop typing"><input type="checkbox" id="edAutosave"> Autosave</label>
+          <button id="edSave" class="small" title="Save (Ctrl+S)" disabled>💾 Save</button>
+        </div>
+      </div>
       <div id="editorHost" class="editor-host"></div>
       <div id="welcome" class="welcome">
         <h2 id="welcomeTitle">Vendroid</h2>
@@ -183,6 +189,7 @@
   <div class="resizer v" data-resize="ai" id="aiResizer" hidden></div>
   <aside class="aipanel" id="aipanel" hidden>
     <div class="pane-head"><span>✨ AI ASSISTANT</span><span class="grow"></span>
+      <span id="aiMeter" class="meter" hidden><span class="track"><span class="fill"></span></span><span class="lbl"></span></span>
       <button class="icon" id="aiClear" title="New conversation">🗑</button>
       <button class="icon" id="aiClose" title="Close (Ctrl+I)">✕</button>
     </div>
@@ -198,6 +205,7 @@
       <div class="row">
         <button id="aiAddFile" class="ghost small" title="Add a file to the context">＋ file</button>
         <label class="chk small" title="Include the latest build error"><input type="checkbox" id="aiWithBuild"> build error</label>
+        <label class="chk small" title="While the AI works, open each file it changes and highlight the change"><input type="checkbox" id="aiFollow"> follow edits</label>
         <span class="grow"></span>
         <button id="aiHermes" class="small" title="Hand this task to Hermes Agent (works through MCP tools)">Send to Hermes</button>
         <button id="aiSend" class="primary small">Send</button>
@@ -211,6 +219,7 @@
   <span id="sbChanges"></span>
   <span class="grow"></span>
   <span id="sbQueue"></span>
+  <button id="sbSave" class="sbsave" hidden></button>
   <span id="sbCursor"></span>
   <span id="sbLang"></span>
   <span id="sbPkg" class="muted"></span>
@@ -287,6 +296,7 @@
       <label>Base URL <input id="pvUrl" placeholder="https://openrouter.ai/api/v1" spellcheck="false"></label>
       <label>API key <input id="pvKey" type="password" autocomplete="off" placeholder="sk-…"></label>
       <label>Default model <input id="pvModel" placeholder="e.g. gpt-5.1, anthropic/claude-sonnet-4.6, hermes-agent" spellcheck="false"></label>
+      <label>Context window (tokens, optional) <input id="pvCtx" type="number" min="1000" step="1000" placeholder="e.g. 128000: shows context use in % in the AI panel"></label>
       <div class="row"><button id="pvSave" class="primary small">Save provider</button><span id="pvErr" class="err small"></span></div>
       <p class="muted small">Examples: OpenAI https://api.openai.com/v1 · OpenRouter https://openrouter.ai/api/v1 · Ollama http://127.0.0.1:11434/v1 · LM Studio http://127.0.0.1:1234/v1 · Hermes http://127.0.0.1:8642/v1 (key = API_SERVER_KEY)</p>
     </div>

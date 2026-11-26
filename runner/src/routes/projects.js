@@ -5,6 +5,8 @@ import { bad } from '../validate.js';
 import { TEMPLATE_IDS } from '../projects.js';
 import { imageInfo, mimeFor } from '../imageinfo.js';
 import { FORBIDDEN } from '../aicode.js';
+import { bus, realRoot } from '../events.js';
+import { openSse } from '../sse.js';
 
 export function register(router, { projects, builds }) {
   const P = (id) => projects.get(id);
@@ -20,6 +22,34 @@ export function register(router, { projects, builds }) {
   router.post('/api/projects', async (req, res, { body }) => sendJson(res, 201, await projects.create(body)));
   router.post('/api/projects/clone', async (req, res, { body }) => sendJson(res, 201, await projects.clone(body)));
   router.get('/api/projects/:id', (req, res, { params }) => sendJson(res, 200, P(params.id)));
+
+  // Live view for the IDE: `files` {paths|null, kinds} (coalesced over 150 ms) and `build` {view}.
+  router.get('/api/projects/:id/events', (req, res, { params }) => {
+    const p = P(params.id);
+    const root = realRoot(p.path);
+    const sse = openSse(req, res);
+    let pending = null; // { paths:Set|null, kinds:Set }
+    let timer = null;
+    const flush = () => {
+      timer = null;
+      if (!pending) return;
+      sse.send('files', { paths: pending.paths ? [...pending.paths] : null, kinds: [...pending.kinds] });
+      pending = null;
+    };
+    const onFiles = (e) => {
+      if (e.root !== root) return;
+      if (!pending) pending = { paths: new Set(), kinds: new Set() };
+      pending.kinds.add(e.kind);
+      if (e.paths === null || pending.paths === null || pending.paths.size > 200) pending.paths = null;
+      else for (const x of e.paths) pending.paths.add(x);
+      if (!timer) timer = setTimeout(flush, 150);
+    };
+    const onBuild = (b) => { if (b.projectId === p.id) sse.send('build', b); };
+    bus.on('files', onFiles);
+    bus.on('build', onBuild);
+    sse.send('hello', { project: p.id });
+    sse.onClose(() => { bus.off('files', onFiles); bus.off('build', onBuild); clearTimeout(timer); });
+  });
   router.post('/api/projects/:id/settings', (req, res, { params, body }) => sendJson(res, 200, projects.update(params.id, body)));
   router.post('/api/projects/:id/delete', (req, res, { params, body }) => sendJson(res, 200, projects.remove(params.id, body.confirm)));
   router.get('/api/trash', (req, res) => sendJson(res, 200, { items: projects.listTrash() }));

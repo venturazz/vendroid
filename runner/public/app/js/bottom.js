@@ -48,6 +48,7 @@ let timer = null;
 let selRec = null;
 const lastStates = new Map();
 const followAfter = new Set();
+const followed = new Set(); // builds the panel already switched to automatically
 
 const LINE_CLASS = [
   [/^=== |^\$ /, 'mark'],
@@ -157,11 +158,28 @@ export async function refreshBuilds() {
   if (!r.builds.length) sel.append(new Option('No builds yet', ''));
   const keep = r.builds.find((b) => b.id === (selected || cur));
   if (keep) sel.value = keep.id;
-  if (!selected && r.builds.length) attachBuild(r.builds[0].id);
+  // A new build (from Run, Hermes, a push webhook …) takes over the panel once the shown one is done.
+  const newest = r.builds[0];
+  const shownDone = !selRec || selRec.id !== selected || TERMINAL.includes(selRec.state);
+  if (newest && selected && newest.id !== selected && !TERMINAL.includes(newest.state) && shownDone && !followed.has(newest.id)) {
+    followed.add(newest.id);
+    attachBuild(newest.id);
+    if (newest.trigger !== 'manual') toast(`⚒ Build started (${newest.trigger}): ${newest.task}`);
+    if ($('bottom').classList.contains('collapsed') || !lcES) showBottom('build');
+  } else if (!selected && r.builds.length) attachBuild(r.builds[0].id);
   else if (!r.builds.length && selected) attachBuild(null);
   emit('queue', r);
 }
 $('buildSel').addEventListener('change', () => { if ($('buildSel').value) attachBuild($('buildSel').value); });
+
+// Server push (live.js): refresh the list right away instead of waiting for the poll.
+let liveTimer = null;
+on('build-live', (b) => {
+  if (b.projectId !== app.project?.id) return;
+  if (b.id === selected) setBuildState(b);
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(() => refreshBuilds(), 120);
+});
 
 /** Start a build for the active project. opts: { install } */
 export async function startBuild({ install = true } = {}) {

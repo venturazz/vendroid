@@ -98,7 +98,7 @@ export function clearHistory(projectId) {
 }
 
 // ------------------------------------------------------------------ 9Router call (streaming)
-async function* streamCompletion(messages, signal, prov) {
+async function* streamCompletion(messages, signal, prov, meta = {}) {
   const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...(prov.apiKey ? { Authorization: `Bearer ${prov.apiKey}` } : {}) };
   let res;
   try {
@@ -106,16 +106,22 @@ async function* streamCompletion(messages, signal, prov) {
       method: 'POST',
       headers,
       signal,
-      body: JSON.stringify({ model: prov.model || 'auto', temperature: 0.2, max_tokens: config.aiCodeMaxTokens, stream: true, messages }),
+      body: JSON.stringify({ model: prov.model || 'auto', temperature: 0.2, max_tokens: config.aiCodeMaxTokens, stream: true, ...(meta.noUsage ? {} : { stream_options: { include_usage: true } }), messages }),
     });
   } catch (e) {
     throw new HttpError(502, `${prov.name} unreachable: ${e.message}`);
+  }
+  if (res.status === 400 && !meta.noUsage) { // a server that rejects stream_options: retry plainly
+    await res.text().catch(() => '');
+    yield* streamCompletion(messages, signal, prov, Object.assign(meta, { noUsage: true }));
+    return;
   }
   if (!res.ok) throw new HttpError(502, `${prov.name} returned ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const ct = res.headers.get('content-type') || '';
   if (!ct.includes('event-stream')) {
     // Some routers ignore stream:true for some models.
     const j = await res.json().catch(() => ({}));
+    if (j.usage) meta.usage = j.usage;
     const t = j.choices?.[0]?.message?.content;
     if (!t) throw new HttpError(502, `${prov.name} returned an empty completion`);
     yield t;
@@ -134,6 +140,7 @@ async function* streamCompletion(messages, signal, prov) {
       if (data === '[DONE]') return;
       try {
         const j = JSON.parse(data);
+        if (j.usage) meta.usage = j.usage;
         const d = j.choices?.[0]?.delta?.content ?? j.choices?.[0]?.message?.content;
         if (d) yield d;
       } catch { /* keep-alive or partial */ }
@@ -157,7 +164,8 @@ export async function chat(p, opts, onDelta, signal, prov) {
     { role: 'user', content: opts.message },
   ];
   let text = '';
-  for await (const d of streamCompletion(messages, signal, prov)) {
+  const meta = {};
+  for await (const d of streamCompletion(messages, signal, prov, meta)) {
     text += d;
     onDelta?.(d);
   }
@@ -166,7 +174,12 @@ export async function chat(p, opts, onDelta, signal, prov) {
   history.push({ role: 'user', content: opts.message, at: now, context: ctx.included });
   history.push({ role: 'assistant', content: text, at: now, proposalId: proposal?.id || null, engine: prov.name, model: prov.model || null });
   saveHistory(p.id, history);
-  return { message: text, context: ctx.included, proposal };
+  // Context use = prompt tokens of this call (the whole conversation we sent). Estimate ~4 chars/token
+  // when the provider does not report usage.
+  const usage = meta.usage
+    ? { contextTokens: meta.usage.prompt_tokens || 0, outputTokens: meta.usage.completion_tokens || 0, estimated: false }
+    : { contextTokens: Math.round(messages.reduce((n, m) => n + m.content.length, 0) / 4), outputTokens: Math.round(text.length / 4), estimated: true };
+  return { message: text, context: ctx.included, proposal, usage };
 }
 
 // ------------------------------------------------------------------ edits
