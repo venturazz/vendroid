@@ -1,0 +1,41 @@
+name: Editor bundle
+
+# Rebuilds runner/public/vendor/codemirror.bundle.js from editor/src and commits it when it changed,
+# so the runner keeps shipping a prebuilt bundle (no npm at runtime). Pushes made with GITHUB_TOKEN
+# do not start other workflows; run CI afterwards (workflow_dispatch) to test the committed bundle.
+on:
+  push:
+    paths:
+      - "editor/**"
+  workflow_dispatch:
+
+concurrency:
+  group: editor-bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build
+        working-directory: editor
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Commit the bundle if it changed
+        run: |
+          if git diff --quiet -- runner/public/vendor/codemirror.bundle.js; then
+            echo "bundle unchanged"; exit 0
+          fi
+          ls -l runner/public/vendor/codemirror.bundle.js
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runner/public/vendor/codemirror.bundle.js
+          git commit -m "Rebuild editor bundle from editor/src"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

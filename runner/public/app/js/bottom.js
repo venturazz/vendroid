@@ -2,6 +2,7 @@
 import { $, app, api, pApi, el, toast, guard, busy, fmtDur, notify, emit, on, pref, setPref } from './core.js';
 import { openFile } from './editor.js';
 import { askToFix, setLatestFailedBuild } from './ai.js';
+import { parseProblems } from './problems.js';
 
 const TERMINAL = ['succeeded', 'failed', 'cancelled'];
 const MAX_LINES = 6000;
@@ -19,7 +20,8 @@ class LogView {
 }
 
 // ---------------------------------------------------------------- panel chrome
-export function showBottom(tab) {
+export function showBottom(tab, { reveal = true } = {}) {
+  if (reveal) emit('reveal', 'build');
   $('bottom').classList.remove('collapsed');
   $('bottomToggle').textContent = '▾';
   setPref('bottomCollapsed', false);
@@ -49,6 +51,31 @@ let selRec = null;
 const lastStates = new Map();
 const followAfter = new Set();
 const followed = new Set(); // builds the panel already switched to automatically
+let newestCreated = '';
+let problems = [];
+
+// ---------------------------------------------------------------- problems (from the newest build)
+function setProblems(list, build) {
+  problems = list;
+  const errors = list.filter((p) => p.severity === 'error').length;
+  $('probCount').hidden = !list.length;
+  $('probCount').textContent = errors ? String(errors) : String(list.length);
+  $('probCount').className = `chip ${errors ? 'err' : 'warn'}`;
+  const box = $('probList');
+  box.textContent = '';
+  if (!list.length) {
+    box.append(el('p', { class: 'muted', text: build ? `No problems in the last build (${build.task}, ${build.state}).` : 'Problems from the compiler appear here after a build.' }));
+  }
+  for (const p of list) {
+    box.append(el('div', { class: `prob ${p.severity}`, title: 'Open at this line', onclick: () => openFile(p.path, { line: p.line }) },
+      el('span', { class: 'si', text: p.severity === 'error' ? '✖' : '⚠' }),
+      el('span', { class: 'pm', text: p.message }),
+      el('span', { class: 'pp', text: `${p.path.split('/').pop()}:${p.line}:${p.col}`, title: p.path })));
+  }
+  emit('problems', list);
+  if (errors && build?.state === 'failed') showBottom('problems', { reveal: false });
+}
+export const currentProblems = () => problems;
 
 const LINE_CLASS = [
   [/^=== |^\$ /, 'mark'],
@@ -96,6 +123,7 @@ export function attachBuild(id) {
   if (es) es.close();
   selected = id;
   bLog.clear();
+  const lines = [];
   $('aiOut').hidden = true;
   if (!id) {
     $('bState').textContent = 'no builds yet';
@@ -112,13 +140,24 @@ export function attachBuild(id) {
     const t = e.data ? JSON.parse(e.data) : '';
     const cls = lineClass(t);
     bLog.add(t, cls, cls === 'err' ? fileLink(t) : null);
+    if (lines.length < 50_000) lines.push(t);
   });
   es.addEventListener('state', (e) => {
     const s = JSON.parse(e.data);
     observe(s);
     if (s.id === selected) setBuildState(s);
   });
-  es.addEventListener('end', () => { es.close(); es = null; refreshBuilds(); });
+  es.addEventListener('end', (e) => {
+    es.close();
+    es = null;
+    const s = JSON.parse(e.data);
+    // Problems always describe the project's newest finished build, not an old one being viewed.
+    if (s.projectId === app.project?.id && s.createdAt >= newestCreated) {
+      newestCreated = s.createdAt;
+      setProblems(s.state === 'cancelled' ? problems : parseProblems(lines, app.project.path, app.project.id), s);
+    }
+    refreshBuilds();
+  });
   $('buildSel').value = id;
 }
 
@@ -158,24 +197,31 @@ export async function refreshBuilds() {
   if (!r.builds.length) sel.append(new Option('No builds yet', ''));
   const keep = r.builds.find((b) => b.id === (selected || cur));
   if (keep) sel.value = keep.id;
-  // A new build (from Run, Hermes, a push webhook …) takes over the panel once the shown one is done.
   const newest = r.builds[0];
-  const shownDone = !selRec || selRec.id !== selected || TERMINAL.includes(selRec.state);
-  if (newest && selected && newest.id !== selected && !TERMINAL.includes(newest.state) && shownDone && !followed.has(newest.id)) {
-    followed.add(newest.id);
-    attachBuild(newest.id);
-    if (newest.trigger !== 'manual') toast(`⚒ Build started (${newest.trigger}): ${newest.task}`);
-    if ($('bottom').classList.contains('collapsed') || !lcES) showBottom('build');
-  } else if (!selected && r.builds.length) attachBuild(r.builds[0].id);
+  if (newest && selected && newest.id !== selected && !TERMINAL.includes(newest.state)) follow(newest);
+  else if (!selected && r.builds.length) attachBuild(r.builds[0].id);
   else if (!r.builds.length && selected) attachBuild(null);
   emit('queue', r);
 }
 $('buildSel').addEventListener('change', () => { if ($('buildSel').value) attachBuild($('buildSel').value); });
 
+/** A new build (from Run, Hermes, a push webhook …) takes over the panel once the shown one is done. */
+function follow(b) {
+  if (followed.has(b.id) || b.id === selected) return;
+  const shownDone = !selRec || selRec.id !== selected || TERMINAL.includes(selRec.state);
+  if (!shownDone) return;
+  followed.add(b.id);
+  attachBuild(b.id);
+  if (b.trigger !== 'manual') toast(`⚒ Build started (${b.trigger}): ${b.task}`);
+  if ($('bottom').classList.contains('collapsed') || !lcES) showBottom('build', { reveal: false });
+}
+
 // Server push (live.js): refresh the list right away instead of waiting for the poll.
 let liveTimer = null;
 on('build-live', (b) => {
   if (b.projectId !== app.project?.id) return;
+  // First event of a build we have not seen: follow it now (a fast build may finish before the list refresh).
+  if (!lastStates.has(b.id) && selected) follow(b);
   if (b.id === selected) setBuildState(b);
   clearTimeout(liveTimer);
   liveTimer = setTimeout(() => refreshBuilds(), 120);
@@ -414,6 +460,9 @@ export function resetBottom() {
   $('scSave').hidden = true;
   selected = null;
   attachBuild(null);
-  showBottom(pref('bottomTab', 'build'));
+  newestCreated = '';
+  followed.clear();
+  setProblems([], null);
+  showBottom(pref('bottomTab', 'build'), { reveal: false });
   if (collapsed) toggleBottom();
 }

@@ -59,7 +59,9 @@ Version 2.1, branch `feat/android-remote-runner`. Each item has an ID, so you ca
 | E-3 | Tabs | Multi-tab, dirty marker, middle-click close, restored per project |
 | E-4 | Languages | Kotlin, Java, XML, Gradle (kts and Groovy), JSON, properties/ProGuard, YAML, TOML, Markdown, shell |
 | E-5 | Editing | Search/replace, bracket matching, auto-close, folding, autocomplete (words), multi-cursor |
-| E-6 | Save | `Ctrl+S`; conflict check (asks before overwriting changes made by AI/git/Hermes); open tabs reload after external changes |
+| E-6 | Save | `Ctrl+S` or **💾 Save**; **Autosave** (default on, 1.2 s after typing stops). Status bar shows *Saved hh:mm:ss / Unsaved / Saving… / Not saved / Changed on disk*. Conflict check: autosave never overwrites a file changed by AI/git/Hermes, Save asks |
+| E-6b | Live view | `GET /api/projects/:id/events` (SSE) pushes file changes from every writer (IDE, MCP/Hermes, AI apply, git pull/switch/discard, build git pull) and build states. Open tabs update in place (only the changed range, so cursor, scroll and undo survive) and the change is highlighted; other tabs get a purple dot; the tree refreshes. **Follow edits** (AI panel): while the AI runs, each file it writes opens |
+| E-6c | Syntax checks | While typing: XML well-formedness, JSON, and bracket/string/comment structure for Kotlin, Java, Groovy (string templates, raw strings, nested comments). One sure error per file, marked in the gutter and underlined |
 | E-7 | Quick open / search | `Ctrl+P` fuzzy file open; `Ctrl+Shift+F` project text search |
 | E-8 | Fallback | Plain textarea if the editor bundle fails to load |
 
@@ -87,6 +89,8 @@ Version 2.1, branch `feat/android-remote-runner`. Each item has an ID, so you ca
 | A-7 | Send to Hermes | Webhook `event: agent_task` with project, task, files, error |
 | A-8 | Analysis | Analyze Error / Triage Crash (root cause, affected, fix steps) *(v1)* |
 | A-9 | Model | `NINE_ROUTER_MODEL`, temperature 0.2, `AI_CODE_MAX_TOKENS` (8000) |
+| A-10 | Activity | Tool calls and reasoning in collapsible blocks ("Activity · 6 tool calls · 12s"), open while the turn runs, folded after; approval cards stay outside the fold |
+| A-11 | Context meter | OpenAI-compatible engines: tokens of the last request (reported by the provider, else ~4 chars/token) and % of the provider's context window (`NINE_ROUTER_CONTEXT`, or per provider in Settings). Hermes: session token totals only, since its API does not report the current context size |
 
 ## 7. Build & run (B)
 
@@ -124,10 +128,15 @@ Requirements checked against Google's rules as of Nov 2026 ([target API](https:/
 
 | ID | Item | Behaviour |
 |---|---|---|
-| L-1 | Build Output | Build history select, live log, timer, commit, APK/log download, clickable compiler errors |
+| L-1 | Build Output | Build history select, live log, timer, commit, APK/log download, clickable compiler errors. A new build from any source (Run, Hermes, webhook) takes over the panel once the shown build is done |
+| L-1b | Problems | Kotlin (`e:`/`w:`), javac and AAPT errors of the project's newest build, errors first, click to open at the line; also squiggles + gutter markers in open files. Opens by itself when a build fails with errors |
 | L-2 | Logcat | Level/tag/keyword filters, "this app" (pid filter), pause, clear, export, crash detection |
 | L-3 | Device | On-demand screenshot (+ auto-refresh), install latest, launch, force stop, clear data |
 | L-4 | Layout | Resizable, collapsible (`Ctrl+\``), last tab remembered |
+
+## 8b. Phone layout (≤ 760 px)
+
+One full-screen view at a time with a bottom navigation bar: **Files** (explorer, search, git, publish), **Code**, **Build** (build output, problems, logcat, device) and **AI**. Opening a file switches to Code, Run to Build. Activity elsewhere puts a dot on the nav button instead of switching. The top bar keeps project, variant, Run and the device badge; inputs use 16 px text (no zoom on focus).
 
 ## 9. Phone (D) *(v1)*
 

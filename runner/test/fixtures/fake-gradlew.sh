@@ -6,7 +6,7 @@ echo "leaked-secrets: $(env | grep -cE '^(AUTH_PASSWORD|NINE_ROUTER_API_KEY|HERM
 echo "signing-env: $(env | grep -c 'injected.signing')"
 echo "signing-props: $(grep -c '^android.injected.signing' "$GRADLE_USER_HOME/gradle.properties")"
 if [ -f "$D/FAIL" ]; then
-  echo "e: file:///app/src/main/java/Main.kt:3:1 Unresolved reference: foo"
+  echo "e: file://$D/app/src/main/java/Main.kt:3:1 Unresolved reference: foo"
   echo "* What went wrong:"
   echo "Execution failed for task ':app:compileDebugKotlin'."
   exit 1

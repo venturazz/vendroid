@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <meta name="color-scheme" content="dark">
 <title>Vendroid</title><link rel="icon" href="/assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/assets/style.css"></head>
 <body>
@@ -126,6 +126,7 @@
     <section class="bottom" id="bottom">
       <div class="bottom-tabs">
         <button data-btab="build" class="active">Build Output</button>
+        <button data-btab="problems">Problems <span id="probCount" class="chip err" hidden></span></button>
         <button data-btab="logcat">Logcat <span id="crashChip" class="chip err" hidden>crash</span></button>
         <button data-btab="device">Device</button>
         <span class="grow"></span>
@@ -147,6 +148,9 @@
         </div>
         <pre id="bLog" class="log" tabindex="0"></pre>
         <div id="aiOut" class="ai-out" hidden></div>
+      </div>
+      <div data-bpane="problems" class="bpane" hidden>
+        <div id="probList" class="problems"></div>
       </div>
       <div data-bpane="logcat" class="bpane" hidden>
         <div class="bar wrap">
@@ -224,6 +228,13 @@
   <span id="sbLang"></span>
   <span id="sbPkg" class="muted"></span>
 </footer>
+
+<nav id="mnav" class="mnav" aria-label="Views" hidden>
+  <button data-mview="files" title="Files, search, git, publish">🗂<span>Files</span></button>
+  <button data-mview="code" id="mnavCode" title="Editor">📝<span>Code</span></button>
+  <button data-mview="build" id="mnavBuild" title="Build output, logcat, device">⚒<span>Build</span></button>
+  <button data-mview="ai" title="AI assistant">✨<span>AI</span></button>
+</nav>
 
 <div id="toast" class="toast" role="status" hidden></div>
 

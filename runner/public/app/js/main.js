@@ -9,6 +9,7 @@ import { refreshBuilds, startBuild, cancelBuild, resetBottom, toggleBottom } fro
 import { openSettings } from './settings.js';
 import { refreshPublish } from './publish.js';
 import { connectLive, disconnectLive } from './live.js';
+import './mobile.js';
 
 // ---------------------------------------------------------------- top bar status
 function badge(node, text, cls, title) {
@@ -132,7 +133,7 @@ function showView(view) {
   if (view === 'publish') refreshPublish();
 }
 document.querySelectorAll('.activitybar [data-view]').forEach((b) => b.addEventListener('click', () => {
-  if (b.classList.contains('active') && !$('sidebar').hidden) { $('sidebar').hidden = true; b.classList.remove('active'); return; }
+  if (b.classList.contains('active') && !$('sidebar').hidden && !document.body.classList.contains('phone')) { $('sidebar').hidden = true; b.classList.remove('active'); return; }
   showView(b.dataset.view);
 }));
 
@@ -235,7 +236,8 @@ async function openProject(id) {
   resetBottom();
   await Promise.all([restoreTabs(), refreshGit(), refreshBuilds(), loadAi(), refreshPublish()]);
   restoreDraft();
-  toggleAi(pref('aiOpen', false));
+  toggleAi(pref('aiOpen', false), { reveal: false });
+  emit('project-opened');
   if (!p.hasGradlew && p.android) toast('This project has no gradlew wrapper: builds need ./gradlew in the project root.', 'err');
   api('/api/projects').then((r) => emit('projects', r.projects)).catch(() => {});
 }

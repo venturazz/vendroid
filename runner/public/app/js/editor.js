@@ -100,7 +100,7 @@ function activate(t) {
 }
 
 /** Open (or focus) a file tab. opts: { line } */
-export async function openFile(path, { line, preview = false } = {}) {
+export async function openFile(path, { line, preview = false, reveal = true } = {}) {
   await cmReady;
   let t = tabs.find((x) => x.kind === 'file' && x.path === path);
   if (!t) {
@@ -125,11 +125,13 @@ export async function openFile(path, { line, preview = false } = {}) {
         onCursor: (ln, col) => { if (t === active) $('sbCursor').textContent = `Ln ${ln}, Col ${col}`; },
       });
       t.saved = f.content;
+      t.editor.setProblems?.(problemsFor(path));
     }
     tabs.push(t);
   }
   activate(t);
   if (line && t.editor) t.editor.revealLine(line);
+  if (reveal) emit('reveal', 'code'); // phone layout: switch to the editor
   return t;
 }
 
@@ -332,14 +334,14 @@ on('files-live', ({ paths, kinds }) => {
   if (!following() || !paths || paths.length !== 1 || !TEXT_EXT.test(paths[0])) return;
   if (!kinds.every((k) => k === 'write' || k === 'create')) return;
   if (paths[0] === activeFile()) return;
-  openFile(paths[0]).then((t) => { if (t) { t.ext = null; renderTabs(); } }).catch(() => {});
+  openFile(paths[0], { reveal: false }).then((t) => { if (t) { t.ext = null; renderTabs(); } }).catch(() => {});
 });
 
 export async function restoreTabs() {
   const s = pref(`tabs:${app.project.id}`, null);
   if (!s?.open?.length) return;
-  for (const p of s.open.slice(0, 12)) await openFile(p).catch(() => {});
-  if (s.active) await openFile(s.active).catch(() => {});
+  for (const p of s.open.slice(0, 12)) await openFile(p, { reveal: false }).catch(() => {});
+  if (s.active) await openFile(s.active, { reveal: false }).catch(() => {});
 }
 
 export const revealLine = async (path, line) => openFile(path, { line });
@@ -405,6 +407,14 @@ $('quickInput').addEventListener('keydown', (e) => {
 window.addEventListener('beforeunload', (e) => {
   if (isDirty()) { e.preventDefault(); e.returnValue = ''; }
 });
+// ---- build problems as squiggles in open files (list from bottom.js)
+let problemList = [];
+const problemsFor = (path) => problemList.filter((p) => p.path === path);
+on('problems', (list) => {
+  problemList = list;
+  for (const t of tabs) if (t.kind === 'file') t.editor?.setProblems?.(problemsFor(t.path));
+});
+
 on('files-changed', (paths) => reloadFromDisk(paths, { source: app.aiRunning ? 'AI' : null }));
 $('sbSave').addEventListener('click', () => save());
 $('edSave').addEventListener('click', () => save());

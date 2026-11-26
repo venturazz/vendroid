@@ -207,6 +207,16 @@ try {
   if (!(await page.textContent('.ed:not([hidden]) .cm-content')).includes('You tapped')) problems.push('editor reverted to stale content after re-apply');
   if (await page.$('.tab.dirty')) problems.push('a tab is dirty after apply');
 
+  step('syntax check: a stray bracket is marked while typing, deleting it clears the mark');
+  await page.click('.ed:not([hidden]) .cm-content');
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('val z = 1)');
+  await page.waitForSelector('.ed:not([hidden]) .cm-lint-marker-error', { timeout: 5000 }).catch(() => problems.push('no lint marker for a missing brace'));
+  await shot('lint-error');
+  for (let k = 0; k < 'val z = 1)'.length; k++) await page.keyboard.press('Backspace');
+  await page.waitForFunction(() => !document.querySelector('.ed:not([hidden]) .cm-lint-marker-error'), null, { timeout: 5000 }).catch(() => problems.push('lint marker stayed after the fix'));
+  if ((await page.textContent('.ed:not([hidden]) .cm-content')).includes('val z = 1')) problems.push('typed text not removed');
+
   step('run: build, install, launch, logcat follows');
   await page.click('#quickConnect');
   await page.waitForSelector('#devBadge.ok', { timeout: 15000 });
@@ -218,6 +228,22 @@ try {
   await page.waitForSelector('#bState.succeeded');
   await page.waitForSelector('#bLog div:has-text("Events injected")');
   await shot('build-output');
+
+  step('problems: a failing build lists compiler errors and marks the file');
+  fs.writeFileSync(path.join(projDir(), 'FAIL'), '');
+  fs.mkdirSync(path.join(projDir(), 'app/src/main/java'), { recursive: true });
+  fs.writeFileSync(path.join(projDir(), 'app/src/main/java/Main.kt'), 'package x\n\nval y = foo\n');
+  await page.click('#btnBuildOnly');
+  await page.waitForSelector('#bState.failed', { timeout: 30000 });
+  await page.waitForSelector('[data-bpane=problems]:not([hidden]) .prob.error:has-text("Unresolved reference")', { timeout: 10000 })
+    .catch(() => problems.push('Problems tab did not list the compiler error'));
+  if ((await page.textContent('#probCount')) !== '1') problems.push(`problem count: ${await page.textContent('#probCount')}`);
+  await shot('problems');
+  await page.click('.prob.error');
+  await page.waitForSelector('.tab.active:has-text("Main.kt")');
+  await page.waitForSelector('.ed:not([hidden]) .cm-lint-marker-error', { timeout: 5000 }).catch(() => problems.push('build error not marked in the editor'));
+  fs.rmSync(path.join(projDir(), 'FAIL'));
+  await page.click('.bottom-tabs [data-btab=build]');
 
   step('live: a build started elsewhere (agent/webhook) takes over the build panel');
   const extId = await page.evaluate(async () => (await (await fetch('/api/projects/ui-test-app/builds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'assembleDebug' }) })).json()).id);
@@ -265,6 +291,36 @@ try {
   await page.waitForSelector('#ide:not([hidden])');
   await page.setViewportSize({ width: 820, height: 900 });
   await shot('narrow');
+
+  step('phone layout: one view at a time with bottom navigation');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForSelector('#mnav:not([hidden])');
+  const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  const visible = (sel) => page.evaluate((s) => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }, sel);
+  await page.click('#mnav [data-mview=files]');
+  await page.waitForSelector('body.phone.m-files');
+  if (!(await visible('#tree'))) problems.push('phone: file tree not visible in Files view');
+  await shot('phone-files');
+  await page.click('#tree .node[data-path="app"]');
+  await page.click('#tree .node[data-path="app/build.gradle.kts"]').catch(async () => {
+    await page.keyboard.press('Control+p');
+    await page.fill('#quickInput', 'app/build.gradle.kts');
+    await page.keyboard.press('Enter');
+  });
+  await page.waitForSelector('body.m-code', { timeout: 5000 }).catch(() => problems.push('phone: opening a file did not switch to Code'));
+  if (!(await visible('.ed:not([hidden]) .cm-content'))) problems.push('phone: editor not visible in Code view');
+  if (await visible('#tree')) problems.push('phone: tree still visible in Code view');
+  await shot('phone-code');
+  await page.click('#mnav [data-mview=build]');
+  if (!(await visible('#bLog'))) problems.push('phone: build log not visible in Build view');
+  await shot('phone-build');
+  await page.click('#mnav [data-mview=ai]');
+  if (!(await visible('#aiInput'))) problems.push('phone: AI input not visible in AI view');
+  await shot('phone-ai');
+  const ov = await overflow();
+  if (ov > 2) problems.push(`phone: page scrolls sideways by ${ov}px`);
+  await page.click('#aiClose');
+  await page.waitForSelector('body.m-code');
 } catch (e) {
   problems.push(`flow: ${e.message.split('\n').slice(0, 4).join(' | ')}`);
   await shot('failure').catch(() => {});

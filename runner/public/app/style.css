@@ -303,3 +303,73 @@ dialog.quick li.sel{background:#1f3a5f}
 .meter .track{width:46px;height:5px;border-radius:3px;background:var(--bg3);overflow:hidden;display:inline-block}
 .meter .fill{display:block;height:100%;width:0;background:var(--acc)}
 .meter.warn .fill{background:var(--warn)}.meter.bad .fill{background:var(--err)}.meter.bad{color:var(--err)}
+
+/* ---- phone layout (js/mobile.js sets body.phone + body.m-<view>) */
+.mnav{display:flex;border-top:1px solid var(--bd);background:var(--bg2);padding-bottom:env(safe-area-inset-bottom);flex:none}
+.mnav[hidden]{display:none}
+.mnav button{flex:1;border:0;border-radius:0;background:transparent;display:flex;flex-direction:column;align-items:center;gap:1px;padding:6px 0 5px;font-size:19px;line-height:1.1;color:var(--mut);position:relative}
+.mnav button span{font-size:11px;letter-spacing:.02em}
+.mnav button.active{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc);background:var(--bg3)}
+.mnav button.badge-dot::after{content:"";position:absolute;top:5px;left:calc(50% + 9px);width:8px;height:8px;border-radius:50%;background:var(--acc2)}
+#mnavBuild[data-state=running] span{color:var(--acc)}#mnavBuild[data-state=failed] span{color:var(--err)}#mnavBuild[data-state=succeeded] span{color:var(--ok)}
+@media (max-width:760px){
+  body{height:100dvh}
+  .topbar{gap:4px;padding:4px 6px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .brand{font-size:0;gap:0;margin-right:0}.brand img{width:22px;height:22px}
+  #quickTarget,#quickConnect,#envBadge,#aiBadge,#btnBuildOnly,#btnRunOpts,#buildPill{display:none}
+  #devBadge{max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #task{max-width:96px}
+  #projBtn{max-width:130px;overflow:hidden;text-overflow:ellipsis}
+  .runbar{padding-left:4px}
+  .hub{padding:14px}
+  .hub-head h1{font-size:20px}
+  dialog{width:calc(100vw - 16px);max-width:none;padding:14px;max-height:calc(100dvh - 16px)}
+  fieldset.tpl{grid-template-columns:1fr}
+  .toast{left:8px;right:8px;bottom:78px;max-width:none}
+  .menu{max-width:calc(100vw - 16px)}
+}
+body.phone .ide{flex-direction:column;position:relative}
+body.phone .resizer{display:none!important}
+body.phone .activitybar{display:none}
+body.phone.m-files .activitybar{display:flex;flex-direction:row;width:auto;border-right:0;border-bottom:1px solid var(--bd);padding:2px 6px;gap:2px}
+body.phone .activitybar .grow,body.phone #btnAiToggle{display:none}
+body.phone .activitybar button{width:46px;height:40px}
+body.phone .activitybar button.active{box-shadow:inset 0 -2px 0 var(--acc)}
+body.phone .sidebar{display:none;position:static;width:100%;max-width:none;flex:1;box-shadow:none}
+body.phone.m-files .sidebar{display:flex}
+body.phone .center{display:none}
+body.phone.m-code .center,body.phone.m-build .center{display:flex;flex:1;min-height:0}
+body.phone.m-code .bottom{display:none}
+body.phone.m-build .editor-area{display:none}
+body.phone.m-build .bottom{flex:1;height:auto!important;min-height:0}
+body.phone #bottomToggle{display:none}
+body.phone .aipanel{display:none;position:static;width:100%;max-width:none;border-left:0}
+body.phone.m-ai .aipanel{display:flex;flex:1;min-height:0}
+body.phone #sbPkg,body.phone #sbBranch,body.phone #sbCursor,body.phone #sbLang,body.phone #sbChanges,body.phone #sbQueue{display:none}
+body.phone .statusbar{justify-content:flex-end}
+body.phone .node{padding:7px 10px;font-size:14px}
+body.phone .pane-head button.icon{padding:6px 9px;font-size:15px}
+body.phone .tab{padding:9px 8px 9px 12px}
+body.phone .tab .x{padding:2px 7px;font-size:16px}
+body.phone .ed-actions .chk{font-size:0;gap:0}
+body.phone .cm-editor{font-size:14px}
+body.phone .bar{flex-wrap:wrap}
+body.phone .bottom-tabs{overflow-x:auto}
+body.phone .bottom-tabs>button:not(.icon){padding:10px 12px}
+body.phone input:not([type=checkbox]):not([type=radio]),body.phone select,body.phone textarea{font-size:16px} /* no iOS zoom-on-focus */
+body.phone .ai-compose textarea{min-height:72px}
+body.phone .ai-compose .row{flex-wrap:wrap}
+body.phone .ai-engine input{width:38%}
+body.phone .shortcuts{display:none}
+
+/* ---- problems */
+.problems{flex:1;min-height:0;overflow:auto;font-size:12px}
+.prob{display:flex;gap:8px;align-items:baseline;padding:4px 6px;border-radius:4px;cursor:pointer}
+.prob:hover{background:var(--bg3)}
+.prob .si{width:14px;flex:none;text-align:center}
+.prob.error .si{color:var(--err)}.prob.warning .si{color:var(--warn)}
+.prob .pm{flex:1;min-width:0;word-break:break-word}
+.prob .pp{color:var(--mut);font-family:var(--mono);white-space:nowrap}
+.chip.warn{background:var(--warn);color:#000}
+.cm-lintRange-error{background-image:none!important;text-decoration:underline wavy var(--err);text-decoration-skip-ink:none;text-underline-offset:3px}
+.cm-lintRange-warning{background-image:none!important;text-decoration:underline wavy var(--warn);text-decoration-skip-ink:none;text-underline-offset:3px}

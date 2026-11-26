@@ -10,11 +10,12 @@ let latestFailedBuild = null;
 
 export function setLatestFailedBuild(id) { latestFailedBuild = id; }
 
-export function toggleAi(show = $('aipanel').hidden) {
+export function toggleAi(show = $('aipanel').hidden, { reveal = true } = {}) {
+  if (reveal) emit('reveal', show ? 'ai' : 'code');
   $('aipanel').hidden = !show;
   $('aiResizer').hidden = !show;
   setPref('aiOpen', show);
-  if (show) $('aiInput').focus();
+  if (show && reveal) $('aiInput').focus();
 }
 
 // ---- engines (Settings → AI providers)

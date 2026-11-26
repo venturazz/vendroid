@@ -144,3 +144,72 @@ test('image header parsing', () => {
   assert.equal(imageInfo(Buffer.from('hello world, not an image')), null);
   assert.equal(imageInfo(Buffer.from('<?xml version="1.0"?><svg xmlns="x"></svg>')).type, 'svg');
 });
+
+// ---- editor diagnostics (pure modules shared with the browser)
+const { parseProblems, relPath } = await import('../public/app/js/problems.js');
+const { bracketCheck, jsonCheck, posOf } = await import('../../editor/src/checks.js');
+function textDoc(text) {
+  const lines = text.split('\n');
+  const starts = [];
+  let p = 0;
+  for (const l of lines) { starts.push(p); p += l.length + 1; }
+  const line = (n) => ({ number: n, from: starts[n - 1], to: starts[n - 1] + lines[n - 1].length, length: lines[n - 1].length });
+  return { length: text.length, lines: lines.length, line, lineAt: (pos) => line(starts.findLastIndex((s) => s <= pos) + 1), sliceString: (a, b) => text.slice(a, b) };
+}
+
+test('build problems: Kotlin, javac and AAPT lines map to project files', () => {
+  const root = '/ws/my-app';
+  const log = [
+    'e: file:///ws/my-app/app/src/main/java/dev/x/MainActivity.kt:12:5 Unresolved reference \'Txt\'.',
+    'w: file:///ws/my-app/app/src/main/java/dev/x/MainActivity.kt:3:1 Parameter \'a\' is never used',
+    'e: /ws/my-app/app/src/main/java/dev/x/Old.kt: (7, 9): Expecting \')\'',
+    '/ws/my-app/app/src/main/java/dev/x/Util.java:4: error: cannot find symbol',
+    'ERROR: /ws/my-app/app/src/main/res/layout/activity_main.xml:8: AAPT: error: attribute android:txt not found.',
+    '/ws/my-app/app/src/main/res/values/strings.xml:5:5-30: AAPT: error: resource string/x not found.',
+    'e: file:///ws/my-app/app/build/generated/ksp/Gen.kt:1:1 generated code is ignored',
+    'e: file:///elsewhere/Other.kt:1:1 outside the project',
+    'BUILD FAILED in 3s',
+  ];
+  const p = parseProblems(log, root, 'my-app');
+  assert.equal(p.length, 6, JSON.stringify(p));
+  assert.deepEqual(p.filter((x) => x.severity === 'warning').map((x) => x.line), [3]);
+  assert.equal(p.at(-1).severity, 'warning', 'errors first');
+  const kt = p.find((x) => x.path === 'app/src/main/java/dev/x/MainActivity.kt' && x.severity === 'error');
+  assert.deepEqual([kt.line, kt.col], [12, 5]);
+  assert.match(kt.message, /Unresolved reference/);
+  assert.ok(p.some((x) => x.path === 'app/src/main/java/dev/x/Old.kt' && x.line === 7 && x.col === 9));
+  assert.ok(p.some((x) => x.path === 'app/src/main/res/layout/activity_main.xml' && x.line === 8));
+  assert.ok(p.some((x) => x.path === 'app/src/main/res/values/strings.xml' && x.col === 5));
+  assert.equal(relPath('/data/ws/my-app/app/A.kt', '/srv/other-root', 'my-app'), 'app/A.kt', 'falls back to the project id in the path');
+});
+
+test('editor syntax checks: brackets, strings, templates, comments, JSON', () => {
+  const check = (src, lang = 'kotlin') => bracketCheck(src, textDoc(src), lang);
+  const ok = [
+    'fun main() { val s = "a ${listOf(1, 2).map { it + 1 }} b"; println("}") }',
+    'val raw = """\n  { not a brace ( \\" \n"""\nfun f() {}',
+    '/* outer /* nested } */ still comment ) */ class A {}',
+    "val c = '}'; val d = '\\''; fun g() = listOf('(')",
+    '// } ) ] in a line comment\nclass B { fun h() = mapOf("k" to "v") }',
+    'val q = "price: $count items ${if (a) "{" else "}"}"',
+  ];
+  for (const src of ok) assert.deepEqual(check(src), [], src);
+  assert.deepEqual(check('class A { void f() { String s = "}"; } }', 'java'), []);
+  assert.deepEqual(check("android { namespace 'dev.x'; defaultConfig { versionName \"1.${v}\" } }", 'groovy'), []);
+
+  const missing = check('class A {\n  fun f() {\n    println("x")\n}\n');
+  assert.equal(missing.length, 1);
+  assert.match(missing[0].message, /Missing '\}': '\{' opened at line 1/);
+  const extra = check('fun f() {\n  g())\n}');
+  assert.match(extra[0].message, /Unexpected '\)': '\{' opened at line 1/);
+  assert.equal(textDoc('fun f() {\n  g())\n}').lineAt(extra[0].from).number, 2);
+  assert.match(check('val s = "unterminated\nval t = 1')[0].message, /Unterminated string \(opened at line 1\)/);
+  assert.match(check('/* never closed')[0].message, /Unclosed block comment/);
+
+  assert.deepEqual(jsonCheck('{"a": [1, 2]}', textDoc('{"a": [1, 2]}')), []);
+  const bad = '{\n  "a": 1,\n}';
+  const j = jsonCheck(bad, textDoc(bad));
+  assert.equal(j.length, 1);
+  assert.ok(j[0].from > 0 && j[0].from <= bad.length);
+  assert.equal(posOf(textDoc('ab\ncd'), 2, 2), 4);
+});
