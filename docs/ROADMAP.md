@@ -124,7 +124,7 @@ changes show up in the editor and git panel.
 | CI-2 | **Android Lint panel** | Run lint, list issues per file with "Fix with AI" |
 | CI-3 | **Formatting** | ktlint/ktfmt on save (optional) |
 | CI-4 | **Gradle helpers** | Dependency search (Maven Central/Google), add to the version catalog, "updates available", vulnerable versions flagged |
-| CI-5 | **Problems view** | Build errors, lint and LSP diagnostics in one list, clickable |
+| CI-5 | **Problems view** | Build errors, lint and LSP diagnostics in one list, clickable. *Done for build errors (Kotlin, javac, AAPT) plus instant XML/JSON/bracket checks; lint and LSP feed into the same list later* |
 
 ---
 
