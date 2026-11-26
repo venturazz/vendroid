@@ -7,6 +7,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -43,7 +44,12 @@ test.before(async () => {
   const hm = http.createServer((req, res) => {
     let b = '';
     req.on('data', (c) => (b += c));
-    req.on('end', () => { hermes.push(JSON.parse(b)); res.end('ok'); });
+    req.on('end', () => {
+      const ts = req.headers['x-webhook-timestamp'];
+      const want = crypto.createHmac('sha256', 'hermes-route-secret').update(`${ts}.${b}`).digest('hex');
+      hermes.push({ ...JSON.parse(b), _url: req.url, _sigOk: req.headers['x-webhook-signature-v2'] === want && Math.abs(Date.now() / 1000 - Number(ts)) < 300, _reqId: req.headers['x-request-id'] });
+      res.end('{"status":"accepted"}');
+    });
   }).listen(0, '127.0.0.1');
   await Promise.all([new Promise((r) => nr.once('listening', r)), new Promise((r) => hm.once('listening', r))]);
   const port = 22000 + Math.floor(Math.random() * 15000);
@@ -52,7 +58,8 @@ test.before(async () => {
     WORKSPACES_DIR: path.join(tmp, 'ws'), DATA_DIR: path.join(tmp, 'data'), ANDROID_HOME: path.join(tmp, 'sdk'),
     GRADLE_USER_HOME: path.join(tmp, 'gradle'), ADB_BIN: path.join(bin, 'adb'), FAKE_STATE: path.join(tmp, 'adb'),
     AAPT2_BINARY: '/bin/true', ALLOW_FILE_REMOTES: 'true', GIT_USER_NAME: 'Vendroid Test', GIT_USER_EMAIL: 'bot@vendroid.test',
-    NINE_ROUTER_URL: `http://127.0.0.1:${nr.address().port}/v1`, HERMES_WEBHOOK_URL: `http://127.0.0.1:${hm.address().port}/webhook`,
+    NINE_ROUTER_URL: `http://127.0.0.1:${nr.address().port}/v1`, HERMES_WEBHOOK_URL: `http://127.0.0.1:${hm.address().port}/webhooks/vendroid`,
+    HERMES_WEBHOOK_SECRET: 'hermes-route-secret',
     GIT_WEBHOOK_SECRET: 'hooksecret',
   };
   const proc = spawn(process.execPath, [path.join(ROOT, 'src/server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -374,6 +381,10 @@ test('Hermes agent task carries project and MCP pointers', async () => {
   assert.equal(h.task, 'Add a settings screen');
   assert.deepEqual(h.files, ['app/build.gradle.kts']);
   assert.equal(h.runner.mcpPath, '/mcp');
+  assert.equal(h.event_type, 'agent_task');
+  assert.equal(h._url, '/webhooks/vendroid');
+  assert.equal(h._sigOk, true, 'generic V2 HMAC signature');
+  assert.match(h._reqId, /^[0-9a-f-]{36}$/);
   assert.equal(h.packageName, 'dev.test.views');
 });
 
@@ -392,10 +403,58 @@ test('push webhook picks the project by repository URL', async () => {
   assert.equal(b.trigger, 'webhook');
 });
 
-test('delete requires typing the id', async () => {
+test('delete moves to trash; restore and purge', async () => {
   assert.equal((await api('/api/projects/hello-compose-2/delete', { method: 'POST', body: { confirm: 'nope' } })).status, 400);
-  assert.equal((await api('/api/projects/hello-compose-2/delete', { method: 'POST', body: { confirm: 'hello-compose-2' } })).status, 200);
+  const d = await api('/api/projects/hello-compose-2/delete', { method: 'POST', body: { confirm: 'hello-compose-2' } });
+  assert.equal(d.status, 200);
   assert.ok(!fs.existsSync(path.join(ctx.env.WORKSPACES_DIR, 'hello-compose-2')));
+  assert.ok(!(await api('/api/projects')).data.projects.some((p) => p.id === 'hello-compose-2'), '.trash is not a project');
+  const t = (await api('/api/trash')).data.items;
+  assert.equal(t.length, 1);
+  assert.equal(t[0].id, 'hello-compose-2');
+  const r = await api('/api/trash/restore', { method: 'POST', body: { entry: t[0].entry } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.id, 'hello-compose-2');
+  assert.ok(fs.existsSync(path.join(ctx.env.WORKSPACES_DIR, 'hello-compose-2/app/build.gradle.kts')));
+  await api('/api/projects/hello-compose-2/delete', { method: 'POST', body: { confirm: 'hello-compose-2' } });
+  const t2 = (await api('/api/trash')).data.items;
+  assert.equal((await api('/api/trash/purge', { method: 'POST', body: { entry: t2[0].entry } })).status, 200);
+  assert.equal((await api('/api/trash')).data.items.length, 0);
+});
+
+test('webview (HTML) template', async () => {
+  const p = (await api('/api/projects', { method: 'POST', body: { name: 'Bola Pecah', packageName: 'dev.test.bola', template: 'webview' } })).data;
+  assert.equal(p.ui, 'webview');
+  const www = path.join(p.path, 'app/src/main/assets/www');
+  for (const f of ['index.html', 'style.css', 'game.js']) assert.ok(fs.existsSync(path.join(www, f)), f);
+  assert.match(fs.readFileSync(path.join(www, 'index.html'), 'utf8'), /<title>Bola Pecah<\/title>/);
+  const kt = fs.readFileSync(path.join(p.path, 'app/src/main/java/dev/test/bola/MainActivity.kt'), 'utf8');
+  assert.match(kt, /file:\/\/\/android_asset\/www\/index\.html/);
+  assert.ok(!/<uses-permission/.test(fs.readFileSync(path.join(p.path, 'app/src/main/AndroidManifest.xml'), 'utf8')), 'offline app requests no permissions');
+  execFileSync(process.execPath, ['--check', path.join(www, 'game.js')]);
+});
+
+test('MCP project lifecycle tools: create, rename, branch, delete, restore', async () => {
+  const T = (await api('/api/agent/info')).data.token;
+  const call = async (name, args) => {
+    const r = (await api('/mcp', { method: 'POST', token: T, body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } } })).data.result;
+    return { err: r.isError, v: r.isError ? r.content[0].text : JSON.parse(r.content[0].text) };
+  };
+  const c = await call('create_project', { name: 'Agent Game', packageName: 'dev.agent.game', template: 'webview' });
+  assert.ok(!c.err, c.v);
+  assert.equal(c.v.id, 'agent-game');
+  assert.equal(c.v.ui, 'webview');
+  assert.equal((await call('create_project', { name: 'Bad', packageName: 'nope' })).err, true);
+  assert.equal((await call('rename_project', { project: 'agent-game', name: 'Agent Game 2' })).v.name, 'Agent Game 2');
+  assert.equal((await call('git_checkout', { project: 'agent-game', branch: 'ai/test', create: true })).v.branch, 'ai/test');
+  assert.ok((await call('git_branches', { project: 'agent-game' })).v.some((b) => b.name === 'ai/test' && b.current));
+  assert.equal((await call('delete_project', { project: 'agent-game', confirm: 'wrong' })).err, true);
+  const del = await call('delete_project', { project: 'agent-game', confirm: 'agent-game' });
+  assert.ok(!del.err, del.v);
+  const trash = (await call('list_trash', {})).v;
+  const entry = trash.find((t) => t.id === 'agent-game').entry;
+  assert.equal((await call('restore_project', { entry })).v.id, 'agent-game');
+  assert.ok((await api('/api/projects')).data.projects.some((p) => p.id === 'agent-game'));
 });
 
 test('IDE assets are served (editor bundle, modules)', async () => {

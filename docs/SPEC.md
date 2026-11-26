@@ -41,12 +41,12 @@ Version 2.1, branch `feat/android-remote-runner`. Each item has an ID, so you ca
 | ID | Item | Behaviour |
 |---|---|---|
 | H-1 | List | Cards: name, package, Compose/Views, version, git, last build state and age, APK download |
-| H-2 | New project | Name, package (suggested), template **Compose** or **XML Views**, minSdk 21-36 |
+| H-2 | New project | Name, package (suggested), template **Compose**, **XML Views** or **HTML/Web game** (offline WebView, assets/www, starter game), minSdk 21-36 |
 | H-3 | Template stack | AGP 9.5.2, Gradle 9.9.2 (official wrapper, checksum-verified), Kotlin 2.4.21, compileSdk 37.2, targetSdk 37, JDK 17; Compose BOM 2026.11.01 / AppCompat 1.8.0, Material 1.14.0, ConstraintLayout 2.2.2. Pinned in `runner/templates/versions.json` |
 | H-4 | First commit | `git init -b main` + "Create … from the … template" |
 | H-5 | Clone | HTTPS URL + optional branch; private repos via `GIT_TOKEN` |
 | H-6 | Auto-discovery | Any folder in the workspace appears as a project |
-| H-7 | Rename / delete | Rename = display name; delete removes the folder after typing the id |
+| H-7 | Rename / delete / trash | Rename = display name; delete moves to a Trash (restorable for `TRASH_DAYS`, default 7), then purged; restore and delete-forever in the Hub |
 | H-8 | Detection | Module, applicationId, version, min/targetSdk and UI toolkit read from the Gradle files |
 
 ## 4. Editor (E)
@@ -138,7 +138,7 @@ Connect by tunnel address, auto-reconnect with back-off, Reconnect / Restart ADB
 |---|---|---|
 | M-1 | MCP | `POST /mcp`, Streamable HTTP (stateless JSON), protocol 2024-11-05 … 2025-11-25 |
 | M-2 | REST | `GET /api/agent/tools`, `POST /api/agent/tools/<name>`; the token also works on the normal REST API |
-| M-3 | Tools | list_projects, project_info, list_files, read_file, search_code, write_file, apply_edits, undo_edits, git_status, git_diff, git_commit, git_pull, git_push, start_build (waitSeconds ≤ 900), get_build, play_check, list_builds, cancel_build, analyze_build_error, list_devices, connect_device, device_action, screenshot (image), logcat |
+| M-3 | Tools | create_project, clone_project, rename_project, delete_project (trash), list_trash, restore_project, git_branches, git_checkout, list_projects, project_info, list_files, read_file, search_code, write_file, apply_edits, undo_edits, git_status, git_diff, git_commit, git_pull, git_push, start_build (waitSeconds ≤ 900), get_build, play_check, list_builds, cancel_build, analyze_build_error, list_devices, connect_device, device_action, screenshot (image), logcat |
 | M-4 | Read-only mode | `MCP_ALLOW_WRITE=false` hides/blocks write tools |
 | M-5 | Reachability | Host: `127.0.0.1:3080/mcp`; containers: `https://<domain>/mcp` or the `edge` container on a shared network |
 

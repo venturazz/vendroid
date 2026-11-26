@@ -37,7 +37,9 @@ function fakeAi() {
       res.end(JSON.stringify({ choices: [{ message: { content: '```json\n{"rootCause":"foo is undefined","affected":["Main.kt"],"fixSteps":["declare foo"],"confidence":"high"}\n```' } }] }));
     }),
     mk((req, res, b) => {
-      calls.hermes.push({ url: req.url, secret: req.headers['x-webhook-secret'], body: JSON.parse(b) });
+      const ts = req.headers['x-webhook-timestamp'];
+      const sigOk = req.headers['x-webhook-signature-v2'] === crypto.createHmac('sha256', 'hermes-secret').update(`${ts}.${b}`).digest('hex');
+      calls.hermes.push({ url: req.url, sigOk, body: JSON.parse(b) });
       res.end('accepted');
     }),
   ]).then(([nr, hm]) => ({ nr, hm, calls }));
@@ -285,7 +287,8 @@ test('failed build auto-notifies Hermes; 9Router analysis parses fenced JSON', a
     assert.equal(b.state, 'failed');
     assert.equal(b.hermes.ok, true);
     const call = ctx.ai.calls.hermes.at(-1);
-    assert.equal(call.secret, 'hermes-secret');
+    assert.equal(call.sigOk, true, 'Hermes generic V2 signature');
+    assert.equal(call.body.event_type, 'build_failed');
     assert.equal(call.body.event, 'build_failed');
     assert.equal(call.body.jobId, r.id);
     assert.equal(call.body.packageName, PKG);

@@ -52,6 +52,10 @@
   </section>
   <div id="hubGrid" class="hub-grid"></div>
   <p id="hubEmpty" class="hub-empty muted" hidden>No projects yet. Create one from a template or clone a repository.</p>
+  <details id="hubTrash" class="hub-trash" hidden>
+    <summary>🗑 Trash <span id="trashCount" class="muted"></span></summary>
+    <div id="trashList"></div>
+  </details>
 </main>
 
 <!-- ============================== IDE ============================== -->
@@ -218,6 +222,7 @@
       <legend>Template</legend>
       <label class="card-radio"><input type="radio" name="tpl" value="compose" checked><b>Jetpack Compose</b><span class="muted small">Material 3, single activity, preview</span></label>
       <label class="card-radio"><input type="radio" name="tpl" value="views"><b>XML Views</b><span class="muted small">AppCompat, Material Components, ViewBinding, ConstraintLayout</span></label>
+      <label class="card-radio"><input type="radio" name="tpl" value="webview"><b>HTML / Web game</b><span class="muted small">HTML, CSS and JavaScript in assets/www, offline, starter game included</span></label>
     </fieldset>
     <div class="sdkbox">
       <div><b>Target &amp; compile:</b> <span id="npTarget">API 37 (Android 17)</span> <span class="tag ok">Google Play ready</span></div>

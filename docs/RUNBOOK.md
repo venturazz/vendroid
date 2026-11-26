@@ -199,8 +199,31 @@ build ends), devices, install, launch, stop and clear, screenshot, logcat, and 9
 available over REST: `GET /api/agent/tools`, `POST /api/agent/tools/<name>` with the bearer token. To give agents
 read-only access, set `MCP_ALLOW_WRITE=false`. Use `MCP_TOKEN` to choose the token yourself.
 
-The Hermes **webhook** (`HERMES_WEBHOOK_URL`) still receives build failures and crashes, plus `event: "agent_task"`
-from *Send to Hermes*. These include `projectId` and `runner.mcpPath`, so Hermes knows where to work.
+The Hermes **webhook** receives build failures and crashes, plus `event: "agent_task"` from *Send to Hermes*. These
+include `projectId` and `runner.mcpPath`, so Hermes knows where to work. Vendroid signs every request with Hermes's
+**generic V2** scheme (`X-Webhook-Signature-V2` = hex HMAC-SHA256 of `<timestamp>.<body>`, `X-Webhook-Timestamp`) and
+sends `event_type` and `X-Request-ID`. Hermes side (`config.yaml` + `.env` in `HERMES_HOME`):
+
+```yaml
+platforms:
+  webhook:
+    enabled: true
+    extra:
+      port: 8644
+      routes:
+        vendroid:
+          secret: "${VENDROID_WEBHOOK_SECRET}"   # same value as HERMES_WEBHOOK_SECRET in Vendroid
+          signature: generic
+          prompt: |
+            Vendroid event: {event} for project {projectId} ({projectName}).
+            Task: {task}
+            Build error tail: {errorTail}
+            Crash: {crashSnippet}
+            Work through the "vendroid" MCP tools; report what you changed and the build result.
+          deliver: "telegram"   # or log
+```
+
+Publish the port to the host only: `ports: ["127.0.0.1:8644:8644"]`, and set `HERMES_WEBHOOK_URL=http://127.0.0.1:8644/webhooks/vendroid`.
 
 ## 6c. Upgrading from v1 (single project)
 

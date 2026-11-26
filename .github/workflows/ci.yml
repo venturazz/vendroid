@@ -117,7 +117,7 @@ jobs:
           docker compose exec -T runner bash /ci/verify-apk.sh /tmp/debug.apk dev.runner.sample
           docker compose exec -T runner bash /ci/verify-apk.sh /tmp/release.apk dev.runner.sample RunnerCI
           if [ -f "${{ runner.temp }}/e2e/template-compose.apk" ]; then
-            for t in compose views; do
+            for t in compose views webview; do
               docker compose cp "${{ runner.temp }}/e2e/template-$t.apk" runner:/tmp/template-$t.apk
               docker compose exec -T runner bash /ci/verify-apk.sh /tmp/template-$t.apk dev.ci.$t
             done

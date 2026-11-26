@@ -9,7 +9,8 @@ import { HttpError, bad, isPackage, isProjectId, isModule, isCloneUrl, isBranch 
 import * as git from './git.js';
 
 const TEMPLATES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates');
-export const TEMPLATE_IDS = ['compose', 'views'];
+export const TEMPLATE_IDS = ['compose', 'views', 'webview'];
+const TRASH_DAYS = Math.max(1, Number(process.env.TRASH_DAYS) || 7);
 
 /** Versions the templates use (shown in the New Project dialog). */
 export function templateVersions() {
@@ -48,6 +49,7 @@ export function inspectProject(dir) {
   const applicationId = pick(/applicationId\s*=?\s*["']([^"']+)["']/);
   const namespace = pick(/namespace\s*=?\s*["']([^"']+)["']/);
   const compose = /compose\s*=\s*true|compose\s+true|kotlin\.plugin\.compose|plugins\.compose/.test(build);
+  const webview = fs.existsSync(path.join(dir, ...(module || 'app').split(':'), 'src/main/assets/www/index.html'));
   return {
     android: !!settings || fs.existsSync(path.join(dir, 'gradlew')),
     hasGradlew: fs.existsSync(path.join(dir, 'gradlew')),
@@ -57,7 +59,7 @@ export function inspectProject(dir) {
     versionCode: Number(pick(/versionCode\s*=?\s*(\d+)/)) || null,
     minSdk: Number(pick(/minSdk(?:Version)?\s*=?\s*(\d+)/)) || null,
     targetSdk: Number(pick(/targetSdk(?:Version)?\s*=?\s*(\d+)/)) || null,
-    ui: compose ? 'compose' : 'views',
+    ui: webview ? 'webview' : compose ? 'compose' : 'views',
   };
 }
 
@@ -239,13 +241,63 @@ export class ProjectStore {
     return this.get(id);
   }
 
-  /** Delete the folder (and metadata). Requires the id typed back as confirmation. */
+  // ---- trash: deleting moves the folder to WORKSPACES_DIR/.trash (same volume, so a rename), and its
+  // metadata to DATA_DIR/projects/.trash. Restorable for TRASH_DAYS (default 7), then purged.
+  #trashDirs() {
+    return { ws: path.join(this.root, '.trash'), meta: path.join(config.projectsDir, '.trash') };
+  }
+
+  /** Move to trash. Requires the id typed back as confirmation. */
   remove(id, confirm) {
-    this.get(id);
+    const p = this.get(id);
     if (confirm !== id) throw bad('Type the project id to confirm deletion');
-    fs.rmSync(this.dir(id), { recursive: true, force: true });
-    fs.rmSync(path.join(config.projectsDir, id), { recursive: true, force: true });
-    return { ok: true };
+    const { ws, meta } = this.#trashDirs();
+    fs.mkdirSync(ws, { recursive: true });
+    fs.mkdirSync(meta, { recursive: true });
+    const entry = `${id}__${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    fs.renameSync(this.dir(id), path.join(ws, entry));
+    const m = path.join(config.projectsDir, id);
+    if (fs.existsSync(m)) fs.renameSync(m, path.join(meta, entry));
+    fs.writeFileSync(path.join(ws, `${entry}.json`), JSON.stringify({ id, name: p.name, packageName: p.packageName, deletedAt: new Date().toISOString() }));
+    this.purgeTrash();
+    return { ok: true, trashed: entry, restorableDays: TRASH_DAYS };
+  }
+
+  listTrash() {
+    const { ws } = this.#trashDirs();
+    let ents = [];
+    try { ents = fs.readdirSync(ws); } catch { return []; }
+    return ents.filter((f) => f.endsWith('.json')).map((f) => {
+      const info = readJson(path.join(ws, f), {});
+      const entry = f.slice(0, -5);
+      const expires = new Date(Date.parse(info.deletedAt || 0) + TRASH_DAYS * 86400_000).toISOString();
+      return { entry, ...info, expiresAt: expires, idFree: !fs.existsSync(path.join(this.root, info.id || '')) };
+    }).filter((t) => fs.existsSync(path.join(ws, t.entry))).sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || ''));
+  }
+
+  restore(entry) {
+    if (typeof entry !== 'string' || !/^[A-Za-z0-9._-]+__[0-9TZ-]+$/.test(entry)) throw bad('Invalid trash entry');
+    const { ws, meta } = this.#trashDirs();
+    const info = readJson(path.join(ws, `${entry}.json`), null);
+    if (!info || !fs.existsSync(path.join(ws, entry))) throw new HttpError(404, 'Not in trash (maybe already purged)');
+    if (fs.existsSync(path.join(this.root, info.id))) throw new HttpError(409, `A project named ${info.id} exists again; rename it first`);
+    fs.renameSync(path.join(ws, entry), path.join(this.root, info.id));
+    if (fs.existsSync(path.join(meta, entry))) fs.renameSync(path.join(meta, entry), path.join(config.projectsDir, info.id));
+    fs.rmSync(path.join(ws, `${entry}.json`), { force: true });
+    return this.get(info.id);
+  }
+
+  /** Permanently delete trash entries (all expired ones, or one given entry). */
+  purgeTrash(entry) {
+    const { ws, meta } = this.#trashDirs();
+    const items = entry ? this.listTrash().filter((t) => t.entry === entry) : this.listTrash().filter((t) => Date.parse(t.expiresAt) < Date.now());
+    if (entry && !items.length) throw new HttpError(404, 'Not in trash');
+    for (const t of items) {
+      fs.rmSync(path.join(ws, t.entry), { recursive: true, force: true });
+      fs.rmSync(path.join(meta, t.entry), { recursive: true, force: true });
+      fs.rmSync(path.join(ws, `${t.entry}.json`), { force: true });
+    }
+    return { ok: true, purged: items.map((t) => t.entry) };
   }
 
   /** Project whose git remote matches a push webhook's repository URLs. */

@@ -107,7 +107,7 @@ export const config = {
   nineRouterUrl: (env.NINE_ROUTER_URL || 'http://127.0.0.1:20128/v1').replace(/\/+$/, ''),
   nineRouterApiKey: env.NINE_ROUTER_API_KEY || '',
   nineRouterModel: env.NINE_ROUTER_MODEL || 'auto',
-  hermesWebhookUrl: env.HERMES_WEBHOOK_URL || 'http://127.0.0.1:8644/webhook',
+  hermesWebhookUrl: env.HERMES_WEBHOOK_URL || 'http://127.0.0.1:8644/webhooks/vendroid',
   hermesWebhookSecret: env.HERMES_WEBHOOK_SECRET || '',
   aiTimeoutMs: int('AI_TIMEOUT_SEC', 90) * 1000,
 };

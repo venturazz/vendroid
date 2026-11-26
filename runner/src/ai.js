@@ -1,5 +1,6 @@
 // 9Router (fast analysis) and Hermes Agent (async investigation) integrations.
 import net from 'node:net';
+import crypto from 'node:crypto';
 import { config } from './config.js';
 import { bad } from './validate.js';
 
@@ -111,10 +112,10 @@ function parseAnalysis(content) {
 
 /** POST an investigation request to the Hermes Agent webhook. */
 export async function notifyHermes(payload) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (config.hermesWebhookSecret) headers['X-Webhook-Secret'] = config.hermesWebhookSecret;
+  const headers = { 'Content-Type': 'application/json', 'X-Request-ID': crypto.randomUUID() };
   const body = {
     event: payload.event || 'manual_investigation',
+    event_type: payload.event || 'manual_investigation', // Hermes webhook routes filter on event_type
     jobId: payload.jobId ?? null,
     projectId: payload.projectId || null,
     projectName: payload.projectName || null,
@@ -130,10 +131,17 @@ export async function notifyHermes(payload) {
     timestamp: new Date().toISOString(),
   };
   try {
+    const raw = JSON.stringify(body);
+    if (config.hermesWebhookSecret) {
+      // Hermes "generic" V2 signature: hex HMAC-SHA256 of "<unix-seconds>.<raw body>" (replay-protected).
+      const ts = String(Math.floor(Date.now() / 1000));
+      headers['X-Webhook-Timestamp'] = ts;
+      headers['X-Webhook-Signature-V2'] = crypto.createHmac('sha256', config.hermesWebhookSecret).update(`${ts}.${raw}`).digest('hex');
+    }
     const res = await fetch(config.hermesWebhookUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify(body),
+      body: raw,
       signal: AbortSignal.timeout(20_000),
     });
     const text = (await res.text()).slice(0, 500);

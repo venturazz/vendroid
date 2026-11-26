@@ -43,7 +43,7 @@ function projectSummary(p) {
     `Project: ${p.name} (folder ${p.id})`,
     `Application module: ${p.module}`,
     p.packageName ? `Package / applicationId: ${p.packageName}` : null,
-    `UI toolkit: ${p.ui === 'compose' ? 'Jetpack Compose' : 'Android Views (XML layouts)'}`,
+    `UI toolkit: ${p.ui === 'compose' ? 'Jetpack Compose' : p.ui === 'webview' ? 'WebView app: the UI is HTML/CSS/JS in app/src/main/assets/www/ (index.html is the entry), Kotlin only hosts the WebView' : 'Android Views (XML layouts)'}`,
     p.minSdk ? `minSdk ${p.minSdk}, targetSdk ${p.targetSdk || '?'}` : null,
   ].filter(Boolean).join('\n');
 }

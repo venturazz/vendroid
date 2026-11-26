@@ -4,8 +4,10 @@ const SUPPORTED = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 export const SERVER_INFO = { name: 'vendroid', title: 'Vendroid Android IDE', version: '2.0.0' };
 
 const INSTRUCTIONS = `Vendroid builds Android apps on an ARM64 server and controls a physical phone over ADB.
-Typical loop: list_projects -> read_file/search_code -> apply_edits -> start_build (install/launch, waitSeconds)
--> logcat / screenshot -> fix -> git_commit. Builds are serialized; start_build with waitSeconds blocks until done.`;
+Typical loop: list_projects (or create_project / clone_project) -> read_file/search_code -> apply_edits ->
+start_build (install/launch, waitSeconds) -> logcat / screenshot -> fix -> git_commit. Builds are serialized; start_build
+with waitSeconds blocks until done. For HTML/JS games and web apps use create_project template=webview and edit
+app/src/main/assets/www/. delete_project moves to a 7-day trash (restore_project).`;
 
 const rpcError = (id, code, message, data) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message, ...(data ? { data } : {}) } });
 

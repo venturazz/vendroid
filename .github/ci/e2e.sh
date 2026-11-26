@@ -60,7 +60,7 @@ REBUILD_ID="$(build assembleDebug)"
 grep -qE 'UP-TO-DATE|FROM-CACHE' "$OUT/$REBUILD_ID.log" || echo "warning: no cached tasks on rebuild"
 # ---- v2: projects from templates, built for real on this machine
 if [ "${E2E_TEMPLATES:-0}" = "1" ]; then
-  for tpl in compose views; do
+  for tpl in compose views webview; do
     pid="$(api -X POST -d "{\"name\":\"CI ${tpl}\",\"packageName\":\"dev.ci.${tpl}\",\"template\":\"${tpl}\"}" "$BASE/api/projects" | j o.id)"
     echo "--- template $tpl -> project $pid" >&2
     bid="$(api -X POST -d '{"task":"assembleDebug"}' "$BASE/api/projects/$pid/builds" | j o.id)"
@@ -105,7 +105,7 @@ TOKEN="$(api "$BASE/api/agent/info" | j o.token)"
 tools="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$BASE/mcp" | j 'o.result.tools.length')"
 echo "--- MCP tools: $tools"
-[ "$tools" -ge 24 ] || { echo "MCP tools/list failed"; exit 1; }
+[ "$tools" -ge 32 ] || { echo "MCP tools/list failed"; exit 1; }
 
 echo "--- e2e OK (artifacts in $OUT)"
 echo "PKG=$PKG"

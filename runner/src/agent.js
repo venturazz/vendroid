@@ -9,6 +9,7 @@ import * as git from './git.js';
 import * as aicode from './aicode.js';
 import * as play from './play.js';
 import { TASKS, HttpError, bad, isSerial, isTcpTarget, isBuildId, isLevel } from './validate.js';
+import { TEMPLATE_IDS } from './projects.js';
 
 const TERMINAL = ['succeeded', 'failed', 'cancelled'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -44,6 +45,57 @@ export function createAgentTools({ projects, builds, watchdog }) {
       description: 'List Android projects in the workspace with package, module and UI toolkit.',
       inputSchema: obj({}),
       run: () => projects.list().map(({ id, name, packageName, module, ui, versionName, git: isGit }) => ({ id, name, packageName, module, ui, versionName, git: isGit })),
+    },
+    {
+      name: 'create_project',
+      description: `Create a new Android project from a template and open it in the workspace (git repo with a first commit). Templates: compose (Jetpack Compose, Material 3), views (XML layouts, ViewBinding), webview (offline HTML/CSS/JS app in app/src/main/assets/www — use this for HTML games and web apps). Targets the newest Android; minSdk 21-36 (default 24). Returns the project id to use with the other tools.`,
+      inputSchema: obj({
+        name: { type: 'string', description: 'App name, 1-40 letters/digits/spaces starting with a letter, e.g. "Bola Pecah"' },
+        packageName: { type: 'string', description: 'Unique application id, e.g. com.venturabyte.bolapecah (never com.example.*)' },
+        template: { type: 'string', enum: TEMPLATE_IDS, default: 'compose' },
+        minSdk: { type: 'integer', minimum: 21, maximum: 36, default: 24 },
+      }, ['name', 'packageName']),
+      write: true,
+      run: (args) => projects.create(args),
+    },
+    {
+      name: 'clone_project',
+      description: 'Clone a git repository (https URL) into the workspace as a new project. Private repos work when the server has GIT_TOKEN.',
+      inputSchema: obj({ url: { type: 'string', description: 'https://… clone URL' }, branch: { type: 'string' } }, ['url']),
+      write: true,
+      run: ({ url, branch }) => projects.clone({ url, branch }),
+    },
+    {
+      name: 'rename_project',
+      description: 'Change the display name (and optionally the package used for launch/logcat) of a project. The folder id stays the same.',
+      inputSchema: obj({ project: S.project, name: { type: 'string' }, packageName: { type: 'string' } }, ['project']),
+      write: true,
+      run: ({ project, name, packageName }) => projects.update(proj(project).id, { ...(name !== undefined ? { name } : {}), ...(packageName !== undefined ? { packageName } : {}) }),
+    },
+    {
+      name: 'delete_project',
+      description: 'Move a project to the trash (restorable for 7 days with restore_project). Set confirm to the project id. Cancel running builds first.',
+      inputSchema: obj({ project: S.project, confirm: { type: 'string', description: 'Must equal the project id' } }, ['project', 'confirm']),
+      write: true,
+      run: ({ project, confirm }) => {
+        const p = proj(project);
+        const q = builds.queueView();
+        if (q.activeProject === p.id || q.queued.some((id) => builds.get(id).projectId === p.id)) throw new HttpError(409, 'This project has a running or queued build; cancel it first');
+        return projects.remove(p.id, confirm);
+      },
+    },
+    {
+      name: 'list_trash',
+      description: 'Deleted projects that can still be restored.',
+      inputSchema: obj({}),
+      run: () => projects.listTrash(),
+    },
+    {
+      name: 'restore_project',
+      description: 'Restore a deleted project from the trash (entry from list_trash).',
+      inputSchema: obj({ entry: { type: 'string' } }, ['entry']),
+      write: true,
+      run: ({ entry }) => projects.restore(entry),
     },
     {
       name: 'project_info',
@@ -125,6 +177,19 @@ export function createAgentTools({ projects, builds, watchdog }) {
       inputSchema: obj({ project: S.project, message: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } }, ['project', 'message']),
       write: true,
       run: ({ project, message, files: list }) => git.commit(proj(project).path, { message, files: list }),
+    },
+    {
+      name: 'git_branches',
+      description: 'Local branches; the current one is marked.',
+      inputSchema: obj({ project: S.project }, ['project']),
+      run: ({ project }) => git.branches(proj(project).path),
+    },
+    {
+      name: 'git_checkout',
+      description: 'Switch to a branch, or create it with create=true (e.g. ai/login-screen before a big change).',
+      inputSchema: obj({ project: S.project, branch: { type: 'string' }, create: { type: 'boolean', default: false } }, ['project', 'branch']),
+      write: true,
+      run: ({ project, branch, create = false }) => git.checkout(proj(project).path, { branch, create }),
     },
     {
       name: 'git_pull',

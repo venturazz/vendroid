@@ -11,6 +11,7 @@ export async function refreshHub() {
   for (const p of r.projects) grid.append(card(p, r.queue));
   $('hubEmpty').hidden = r.projects.length > 0;
   emit('projects', r.projects);
+  refreshTrash();
 }
 
 function card(p, queue) {
@@ -40,11 +41,11 @@ function card(p, queue) {
     el('button', { class: 'ghost', title: 'Delete project folder', text: '🗑', onclick: guard(async (e) => {
       e.stopPropagation();
       const c = await prompt(`Delete "${p.name}"?`, {
-        text: `This permanently deletes the folder ${p.path} and its build history. Type "${p.id}" to confirm.`, placeholder: p.id, okLabel: 'Delete',
+        text: `The project moves to the Trash (restorable for 7 days). Type "${p.id}" to confirm.`, placeholder: p.id, okLabel: 'Move to Trash',
       });
       if (c === null) return;
       await api(`/api/projects/${encodeURIComponent(p.id)}/delete`, { method: 'POST', body: { confirm: c } });
-      toast(`Deleted ${p.name}`, 'ok');
+      toast(`${p.name} moved to Trash`, 'ok');
       refreshHub();
     }) }),
   );
@@ -55,6 +56,31 @@ function card(p, queue) {
 }
 
 // ---- new project
+async function refreshTrash() {
+  let items = [];
+  try { items = (await api('/api/trash')).items; } catch { /* ignore */ }
+  $('hubTrash').hidden = !items.length;
+  $('trashCount').textContent = `(${items.length})`;
+  const box = $('trashList');
+  box.textContent = '';
+  for (const t of items) {
+    box.append(el('div', { class: 'trash-row' },
+      el('b', { text: t.name || t.id }),
+      el('span', { class: 'muted', text: `${t.packageName || ''} · deleted ${fmtAgo(t.deletedAt)} · purged ${new Date(t.expiresAt).toLocaleDateString()}` }),
+      el('span', { class: 'grow' }),
+      el('button', { class: 'small', text: '↺ Restore', disabled: !t.idFree, title: t.idFree ? '' : `A project named ${t.id} exists`, onclick: guard(async () => {
+        await api('/api/trash/restore', { method: 'POST', body: { entry: t.entry } });
+        toast(`Restored ${t.name || t.id}`, 'ok');
+        refreshHub();
+      }) }),
+      el('button', { class: 'small danger', text: 'Delete forever', onclick: guard(async () => {
+        if (!confirm(`Permanently delete ${t.name || t.id}? This cannot be undone.`)) return;
+        await api('/api/trash/purge', { method: 'POST', body: { entry: t.entry } });
+        refreshHub();
+      }) })));
+  }
+}
+
 const suggestPkg = (name) => `com.example.${name.toLowerCase().replace(/[^a-z0-9]+/g, '').replace(/^\d+/, '') || 'app'}`;
 let pkgTouched = false;
 $('npName').addEventListener('input', () => { if (!pkgTouched) $('npPkg').value = suggestPkg($('npName').value); });

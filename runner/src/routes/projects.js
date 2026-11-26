@@ -20,6 +20,9 @@ export function register(router, { projects, builds }) {
   router.get('/api/projects/:id', (req, res, { params }) => sendJson(res, 200, P(params.id)));
   router.post('/api/projects/:id/settings', (req, res, { params, body }) => sendJson(res, 200, projects.update(params.id, body)));
   router.post('/api/projects/:id/delete', (req, res, { params, body }) => sendJson(res, 200, projects.remove(params.id, body.confirm)));
+  router.get('/api/trash', (req, res) => sendJson(res, 200, { items: projects.listTrash() }));
+  router.post('/api/trash/restore', (req, res, { body }) => sendJson(res, 200, projects.restore(body.entry)));
+  router.post('/api/trash/purge', (req, res, { body }) => sendJson(res, 200, projects.purgeTrash(body.entry)));
 
   // ---- files
   router.get('/api/projects/:id/tree', (req, res, { params, url }) => {
