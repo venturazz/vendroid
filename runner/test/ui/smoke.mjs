@@ -234,7 +234,7 @@ try {
   fs.mkdirSync(path.join(projDir(), 'app/src/main/java'), { recursive: true });
   fs.writeFileSync(path.join(projDir(), 'app/src/main/java/Main.kt'), 'package x\n\nval y = foo\n');
   await page.click('#btnBuildOnly');
-  await page.waitForSelector('#bState.failed', { timeout: 30000 });
+  await page.waitForSelector('#bState.failed', { state: 'attached', timeout: 30000 }); // the Problems tab opens on top
   await page.waitForSelector('[data-bpane=problems]:not([hidden]) .prob.error:has-text("Unresolved reference")', { timeout: 10000 })
     .catch(() => problems.push('Problems tab did not list the compiler error'));
   if ((await page.textContent('#probCount')) !== '1') problems.push(`problem count: ${await page.textContent('#probCount')}`);
