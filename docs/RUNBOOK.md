@@ -211,8 +211,7 @@ platforms:
     extra:
       port: 8644
       routes:
-        vendroid:
-          secret: "${VENDROID_WEBHOOK_SECRET}"   # same value as HERMES_WEBHOOK_SECRET in Vendroid
+        vendroid:                 # secret: global WEBHOOK_SECRET from Hermes .env (= HERMES_WEBHOOK_SECRET in Vendroid)
           signature: generic
           prompt: |
             Vendroid event: {event} for project {projectId} ({projectName}).
@@ -223,7 +222,9 @@ platforms:
           deliver: "telegram"   # or log
 ```
 
-Publish the port to the host only: `ports: ["127.0.0.1:8644:8644"]`, and set `HERMES_WEBHOOK_URL=http://127.0.0.1:8644/webhooks/vendroid`.
+Hermes `.env`: `WEBHOOK_ENABLED=true`, `WEBHOOK_PORT=8644`, `WEBHOOK_SECRET=<long random>`. Publish the port to the host
+only (`ports: ["127.0.0.1:8644:8644"]`) and set `HERMES_WEBHOOK_URL=http://127.0.0.1:8644/webhooks/vendroid` plus the same
+secret as `HERMES_WEBHOOK_SECRET` in Vendroid.
 
 ## 6c. Upgrading from v1 (single project)
 
