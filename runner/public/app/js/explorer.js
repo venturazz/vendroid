@@ -122,6 +122,50 @@ async function deletePath(path, type) {
   emit('fs-changed');
 }
 
+// ---- upload (button, context menu, drag & drop) and download
+async function uploadFiles(fileList, dir = targetDir()) {
+  const list = [...fileList];
+  if (!list.length) return;
+  let done = 0;
+  for (const f of list) {
+    if (f.size > 25 * 1024 * 1024) { toast(`${f.name}: larger than 25 MB`, 'err'); continue; }
+    const rel = dir ? `${dir}/${f.name}` : f.name;
+    const url = `/api/projects/${encodeURIComponent(app.project.id)}/upload?path=${encodeURIComponent(rel)}`;
+    let r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+    if (r.status === 409 && confirm(`${rel} already exists. Replace it?`)) {
+      r = await fetch(`${url}&overwrite=1`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+    }
+    if (!r.ok && r.status !== 409) { toast(`${f.name}: ${(await r.json().catch(() => ({}))).error || r.status}`, 'err'); continue; }
+    if (r.ok) done++;
+    if (/^res\//.test(rel.replace(/^.*src\/main\//, '')) && !/^[a-z0-9_.]+$/.test(f.name)) {
+      toast(`${f.name}: Android resource names must be lowercase a-z, 0-9 and _ (rename it, or the build fails)`, 'err');
+    }
+  }
+  if (done) {
+    toast(`Uploaded ${done} file${done === 1 ? '' : 's'}${dir ? ` to ${dir}/` : ''}`, 'ok');
+    if (dir) expanded.add(dir);
+    await refreshTree();
+    emit('fs-changed');
+  }
+}
+const picker = el('input', { type: 'file', multiple: true, hidden: true });
+document.body.append(picker);
+let pickDir = '';
+picker.addEventListener('change', guard(async () => { await uploadFiles(picker.files, pickDir); picker.value = ''; }));
+const pickUpload = (dir = targetDir()) => { pickDir = dir; picker.click(); };
+$('exUpload').addEventListener('click', () => pickUpload());
+const tree = $('tree');
+tree.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); tree.classList.add('dropping'); } });
+tree.addEventListener('dragleave', () => tree.classList.remove('dropping'));
+tree.addEventListener('drop', guard(async (e) => {
+  if (!e.dataTransfer?.files?.length) return;
+  e.preventDefault();
+  tree.classList.remove('dropping');
+  const n = e.target.closest('.node');
+  const dir = n ? (n.dataset.type === 'dir' ? n.dataset.path : dirname(n.dataset.path)) : '';
+  await uploadFiles(e.dataTransfer.files, dir);
+}));
+
 $('exNewFile').addEventListener('click', guard(() => newFile()));
 $('exNewDir').addEventListener('click', guard(() => newDir()));
 $('exRefresh').addEventListener('click', guard(refreshTree));
@@ -150,10 +194,12 @@ $('tree').addEventListener('contextmenu', (e) => {
   ctxMenu = el('div', { class: 'menu ctx' },
     item('New file…', () => newFile(dir)),
     item('New folder…', () => newDir(dir)),
+    item('Upload files here…', () => pickUpload(dir)),
     path ? el('hr') : null,
     path && type === 'file' ? item('Add to AI context', () => emit('ai-add-context', path)) : null,
     path ? item('Rename / move…', () => renamePath(path)) : null,
     path ? item('Copy path', () => navigator.clipboard?.writeText(path)) : null,
+    path && type === 'file' ? item('Download', () => { location.href = `/api/projects/${encodeURIComponent(app.project.id)}/raw?path=${encodeURIComponent(path)}&download=1`; }) : null,
     path ? item('Delete', () => deletePath(path, type)) : null);
   ctxMenu.style.left = `${e.clientX}px`;
   ctxMenu.style.top = `${e.clientY}px`;

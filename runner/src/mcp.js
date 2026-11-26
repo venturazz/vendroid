@@ -38,9 +38,12 @@ async function handleOne(msg, tools) {
       case 'tools/call': {
         if (typeof params.name !== 'string') return rpcError(id, -32602, 'params.name is required');
         try {
-          const { image, value } = await tools.call(params.name, params.arguments || {});
+          const { image, value, mime, meta } = await tools.call(params.name, params.arguments || {});
           if (image) {
-            result = { content: [{ type: 'image', data: Buffer.from(value).toString('base64'), mimeType: 'image/png' }] };
+            result = { content: [
+              { type: 'image', data: Buffer.from(value).toString('base64'), mimeType: mime || 'image/png' },
+              ...(meta ? [{ type: 'text', text: JSON.stringify(meta) }] : []),
+            ] };
           } else {
             const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
             result = { content: [{ type: 'text', text }] };

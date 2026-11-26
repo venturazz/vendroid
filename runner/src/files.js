@@ -7,6 +7,7 @@ import { HttpError, bad, isRelPath } from './validate.js';
 
 export const MAX_READ = 2 * 1024 * 1024;
 export const MAX_WRITE = 5 * 1024 * 1024;
+export const MAX_BINARY = Math.max(1, Number(process.env.MAX_BINARY_MB) || 25) * 1024 * 1024;
 const HIDDEN = new Set(['.git', '.gradle', '.idea', '.kotlin', '.cxx', '.externalNativeBuild', 'build', 'captures']);
 const SKIP_SEARCH = new Set([...HIDDEN, 'node_modules']);
 
@@ -114,6 +115,36 @@ export function write(root, rel, content, { baseHash, create = false } = {}) {
   fs.writeFileSync(tmp, content, { mode });
   fs.renameSync(tmp, abs);
   return { path: rel, hash: sha1(Buffer.from(content)), size: Buffer.byteLength(content), created: !exists };
+}
+
+/** Raw bytes of any file (images, sounds, fonts …) up to MAX_BINARY. */
+export function readBytes(root, rel) {
+  const abs = resolve(root, rel);
+  let st;
+  try { st = fs.statSync(abs); } catch { throw new HttpError(404, `File not found: ${rel}`); }
+  if (!st.isFile()) throw bad(`${rel} is not a file`);
+  if (st.size > MAX_BINARY) throw new HttpError(413, `${rel} is larger than ${MAX_BINARY / 1048576} MB`);
+  return fs.readFileSync(abs);
+}
+
+/** Write raw bytes atomically (same conflict check as write()). */
+export function writeBytes(root, rel, buf, { baseHash, create = false } = {}) {
+  if (!Buffer.isBuffer(buf)) throw bad('content must be bytes');
+  if (buf.length > MAX_BINARY) throw new HttpError(413, `File larger than ${MAX_BINARY / 1048576} MB`);
+  const abs = resolve(root, rel);
+  const exists = fs.existsSync(abs);
+  if (exists && fs.statSync(abs).isDirectory()) throw bad(`${rel} is a folder`);
+  if (create && exists) throw new HttpError(409, `${rel} already exists`);
+  if (exists && baseHash !== undefined && baseHash !== null && sha1(fs.readFileSync(abs)) !== baseHash) {
+    const e = new HttpError(409, `${rel} changed on disk`);
+    e.body = { conflict: true, hash: sha1(fs.readFileSync(abs)) };
+    throw e;
+  }
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  const tmp = `${abs}.vendroid-${process.pid}-${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, buf, { mode: exists ? fs.statSync(abs).mode & 0o777 : 0o644 });
+  fs.renameSync(tmp, abs);
+  return { path: rel, hash: sha1(buf), size: buf.length, created: !exists };
 }
 
 export function mkdir(root, rel) {

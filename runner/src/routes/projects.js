@@ -3,6 +3,8 @@ import * as files from '../files.js';
 import * as git from '../git.js';
 import { bad } from '../validate.js';
 import { TEMPLATE_IDS } from '../projects.js';
+import { imageInfo, mimeFor } from '../imageinfo.js';
+import { FORBIDDEN } from '../aicode.js';
 
 export function register(router, { projects, builds }) {
   const P = (id) => projects.get(id);
@@ -42,6 +44,27 @@ export function register(router, { projects, builds }) {
       default: throw bad('op must be mkdir, rename or delete');
     }
   });
+  // Raw bytes (image preview, sound/font download). Never served inline as HTML/SVG script.
+  router.get('/api/projects/:id/raw', (req, res, { params, url }) => {
+    const rel = url.searchParams.get('path') || '';
+    const buf = files.readBytes(P(params.id).path, rel);
+    const mime = mimeFor(rel);
+    const safeInline = /^(image\/(png|jpeg|webp|gif)|audio\/|video\/)/.test(mime);
+    res.writeHead(200, {
+      'Content-Type': safeInline ? mime : 'application/octet-stream',
+      'Content-Length': buf.length,
+      'Cache-Control': 'no-store',
+      'Content-Disposition': `${safeInline && url.searchParams.get('download') !== '1' ? 'inline' : 'attachment'}; filename="${rel.split('/').pop().replace(/[^A-Za-z0-9._-]/g, '_')}"`,
+    });
+    res.end(buf);
+  });
+  // Upload any file: body = raw bytes, ?path=dir/name, &overwrite=1 to replace.
+  router.post('/api/projects/:id/upload', (req, res, { params, raw, url }) => {
+    const rel = url.searchParams.get('path') || '';
+    if (FORBIDDEN.test(rel)) throw bad('path not allowed');
+    const r = files.writeBytes(P(params.id).path, rel, raw, { create: url.searchParams.get('overwrite') !== '1' });
+    sendJson(res, 201, { ...r, image: imageInfo(raw) || undefined });
+  }, { raw: true, maxBytes: 40 * 1024 * 1024 });
   router.get('/api/projects/:id/search', (req, res, { params, url }) => sendJson(res, 200, files.search(P(params.id).path, url.searchParams.get('q') || '')));
 
   // ---- git

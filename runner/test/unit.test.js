@@ -129,3 +129,18 @@ test('MCP JSON-RPC: initialize, tools/list, tool errors, notifications, batches'
   const batch = await handleMcp([{ jsonrpc: '2.0', id: 6, method: 'ping' }, { jsonrpc: '2.0', method: 'notifications/x' }], tools);
   assert.equal(batch.body.length, 1);
 });
+
+import { imageInfo } from '../src/imageinfo.js';
+
+test('image header parsing', () => {
+  const png = Buffer.alloc(33);
+  png.writeUInt32BE(0x89504e47, 0); png.writeUInt32BE(0x0d0a1a0a, 4); png.writeUInt32BE(13, 8);
+  png.write('IHDR', 12, 'ascii'); png.writeUInt32BE(192, 16); png.writeUInt32BE(144, 20);
+  assert.deepEqual(imageInfo(png), { type: 'png', width: 192, height: 144 });
+  const gif = Buffer.from('GIF89a\x10\x00\x20\x00\x00\x00\x00\x00', 'latin1');
+  assert.deepEqual(imageInfo(gif), { type: 'gif', width: 16, height: 32 });
+  const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x30, 0x00, 0x40, 0x03]);
+  assert.deepEqual(imageInfo(jpg), { type: 'jpeg', width: 64, height: 48 });
+  assert.equal(imageInfo(Buffer.from('hello world, not an image')), null);
+  assert.equal(imageInfo(Buffer.from('<?xml version="1.0"?><svg xmlns="x"></svg>')).type, 'svg');
+});

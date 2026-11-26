@@ -105,7 +105,7 @@ TOKEN="$(api "$BASE/api/agent/info" | j o.token)"
 tools="$(curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$BASE/mcp" | j 'o.result.tools.length')"
 echo "--- MCP tools: $tools"
-[ "$tools" -ge 32 ] || { echo "MCP tools/list failed"; exit 1; }
+[ "$tools" -ge 37 ] || { echo "MCP tools/list failed"; exit 1; }
 
 echo "--- e2e OK (artifacts in $OUT)"
 echo "PKG=$PKG"

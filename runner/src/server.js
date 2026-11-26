@@ -73,10 +73,10 @@ async function handle(req, res) {
     if (!m.route.opts.public && !req.authKind) throw new HttpError(401, 'Authentication required');
     if (req.method !== 'GET' && req.method !== 'HEAD' && !auth.sameOrigin(req)) throw new HttpError(403, 'Cross-origin request blocked');
     if (m.route.opts.raw) {
-      const raw = await readRaw(req, 5 * 1024 * 1024);
+      const raw = await readRaw(req, m.route.opts.maxBytes || 5 * 1024 * 1024);
       await m.route.handler(req, res, { params: m.params, raw, url });
     } else {
-      const body = await readJson(req, 8 * 1024 * 1024, { allowArray: !!m.route.opts.jsonAny });
+      const body = await readJson(req, m.route.opts.maxBytes || 8 * 1024 * 1024, { allowArray: !!m.route.opts.jsonAny });
       await m.route.handler(req, res, { params: m.params, body, url });
     }
   } catch (e) {

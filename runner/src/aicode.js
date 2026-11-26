@@ -212,7 +212,7 @@ function locate(content, search) {
   return { start, end, reindent: [indentOf(sl[0]), indentOf(cl[hits[0]])] };
 }
 
-const FORBIDDEN = /(^|\/)(\.git|build|\.gradle)(\/|$)|gradle-wrapper\.jar$|\.(jks|keystore)$|(^|\/)local\.properties$/;
+export const FORBIDDEN = /(^|\/)(\.git|build|\.gradle)(\/|$)|gradle-wrapper\.jar$|\.(jks|keystore)$|(^|\/)local\.properties$/;
 
 /** Compute the resulting files for a set of edits, without writing anything. */
 export function computeEdits(root, edits) {
@@ -324,11 +324,55 @@ export function undo(p, applyId) {
   const changedSince = rec.files.filter((f) => files.currentHash(p.path, f.path) !== f.afterHash);
   if (changedSince.length) throw new HttpError(409, `Edited after applying: ${changedSince.map((f) => f.path).join(', ')}. Undo manually or with git.`);
   for (const f of rec.files) {
-    if (f.before === null) files.remove(p.path, f.path);
+    if (f.binary) {
+      if (f.backup) files.writeBytes(p.path, f.path, fs.readFileSync(path.join(undoDir(p.id), f.backup)));
+      else if (f.wasDir === undefined && files.currentHash(p.path, f.path) !== null) files.remove(p.path, f.path);
+    } else if (f.before === null) files.remove(p.path, f.path);
     else files.write(p.path, f.path, f.before);
   }
+  for (const f of rec.files) if (f.backup) fs.rmSync(path.join(undoDir(p.id), f.backup), { force: true });
   fs.rmSync(file, { force: true });
   return { ok: true, files: rec.files.map((f) => f.path) };
+}
+
+/**
+ * Binary-safe file operations with undo (write bytes, delete, move). `op`: {type:'write', path, bytes}
+ * | {type:'delete', path} (files only) | {type:'move', path, to}. Returns { applyId, ... }.
+ */
+export function fileOp(p, op, source = 'agent') {
+  const guard = (rel) => { if (FORBIDDEN.test(rel)) throw bad(`path not allowed: ${rel}`); };
+  guard(op.path);
+  if (op.to) guard(op.to);
+  const applyId = `u${Date.now().toString(36)}${crypto.randomBytes(2).toString('hex')}`;
+  fs.mkdirSync(undoDir(p.id), { recursive: true });
+  const backupOf = (rel, tag) => {
+    const hash = files.currentHash(p.path, rel);
+    if (hash === null) return null;
+    const name = `${applyId}.${tag}.bin`;
+    fs.writeFileSync(path.join(undoDir(p.id), name), files.readBytes(p.path, rel));
+    return name;
+  };
+  const rec = { id: applyId, at: new Date().toISOString(), source, files: [] };
+  let result;
+  if (op.type === 'write') {
+    const backup = backupOf(op.path, 'a');
+    result = files.writeBytes(p.path, op.path, op.bytes);
+    rec.files.push({ path: op.path, binary: true, backup, afterHash: result.hash });
+  } else if (op.type === 'delete') {
+    const backup = backupOf(op.path, 'a');
+    if (!backup) throw new HttpError(404, `${op.path} not found (only files can be deleted with undo; use move to rename folders)`);
+    files.remove(p.path, op.path);
+    rec.files.push({ path: op.path, binary: true, backup, afterHash: null });
+    result = { path: op.path, deleted: true };
+  } else if (op.type === 'move') {
+    const backup = backupOf(op.path, 'a');
+    if (!backup) throw new HttpError(404, `${op.path} not found or is a folder`);
+    result = files.rename(p.path, op.path, op.to);
+    rec.files.push({ path: op.to, binary: true, backup: null, afterHash: files.currentHash(p.path, op.to) });
+    rec.files.push({ path: op.path, binary: true, backup, afterHash: null });
+  } else throw bad('Unknown file operation');
+  fs.writeFileSync(path.join(undoDir(p.id), `${applyId}.json`), JSON.stringify(rec));
+  return { ...result, applyId };
 }
 
 /** For agents (MCP): parse + apply SEARCH/REPLACE text directly. */

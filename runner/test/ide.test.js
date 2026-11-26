@@ -474,3 +474,74 @@ test('config exposes template versions (target shown in the New Project dialog)'
   assert.equal(p.minSdk, 36);
   assert.equal(p.targetSdk, 37);
 });
+
+function tinyPng(w, h) {
+  const b = Buffer.alloc(57);
+  b.writeUInt32BE(0x89504e47, 0); b.writeUInt32BE(0x0d0a1a0a, 4); b.writeUInt32BE(13, 8);
+  b.write('IHDR', 12, 'ascii'); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); b[24] = 8; b[25] = 6;
+  return b;
+}
+
+test('binary files: dashboard upload/raw and MCP write/read/delete/move with undo', async () => {
+  const P = '/api/projects/hello-views';
+  const png = tinyPng(144, 144);
+  const up = await fetch(`${ctx.base}${P}/upload?path=app/src/main/res/mipmap-xxhdpi/ic_launcher.png`, { method: 'POST', headers: { Cookie: ctx.cookie, 'Content-Type': 'application/octet-stream' }, body: png });
+  assert.equal(up.status, 201);
+  assert.deepEqual((await up.json()).image, { type: 'png', width: 144, height: 144 });
+  assert.equal((await fetch(`${ctx.base}${P}/upload?path=app/src/main/res/mipmap-xxhdpi/ic_launcher.png`, { method: 'POST', headers: { Cookie: ctx.cookie }, body: png })).status, 409);
+  assert.equal((await fetch(`${ctx.base}${P}/upload?path=.git/hooks/pre-commit`, { method: 'POST', headers: { Cookie: ctx.cookie }, body: png })).status, 400);
+  const raw = await fetch(`${ctx.base}${P}/raw?path=app/src/main/res/mipmap-xxhdpi/ic_launcher.png`, { headers: { Cookie: ctx.cookie } });
+  assert.equal(raw.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await raw.arrayBuffer()), png);
+  const svgRaw = await (async () => {
+    await api(`${P}/file`, { method: 'POST', body: { path: 'evil.svg', content: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' } });
+    return fetch(`${ctx.base}${P}/raw?path=evil.svg`, { headers: { Cookie: ctx.cookie } });
+  })();
+  assert.equal(svgRaw.headers.get('content-type'), 'application/octet-stream', 'svg never served inline');
+  assert.match(svgRaw.headers.get('content-disposition'), /^attachment/);
+
+  const T = (await api('/api/agent/info')).data.token;
+  const rpc = async (name, args) => (await api('/mcp', { method: 'POST', token: T, body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } } })).data.result;
+  const big = tinyPng(512, 512);
+  const w = await rpc('write_binary_file', { project: 'hello-views', path: 'app/src/main/res/mipmap-xxxhdpi/ic_launcher.png', base64: `data:image/png;base64,${big.toString('base64')}` });
+  assert.ok(!w.isError, w.content[0].text);
+  const wv = JSON.parse(w.content[0].text);
+  assert.deepEqual(wv.image, { type: 'png', width: 512, height: 512 });
+  assert.deepEqual(fs.readFileSync(path.join(ctx.env.WORKSPACES_DIR, 'hello-views/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png')), big);
+  // sound (base64 of arbitrary bytes) into res/raw
+  const snd = Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 1, 2, 3, 4]);
+  assert.ok(!(await rpc('write_binary_file', { project: 'hello-views', path: 'app/src/main/res/raw/tap.mp3', base64: snd.toString('base64') })).isError);
+  // validation
+  assert.equal((await rpc('write_binary_file', { project: 'hello-views', path: 'app/src/main/res/drawable/Bad-Name.png', base64: big.toString('base64') })).isError, true);
+  assert.equal((await rpc('write_binary_file', { project: 'hello-views', path: 'app/src/main/res/drawable/fake.png', base64: Buffer.from('not png').toString('base64') })).isError, true);
+  assert.equal((await rpc('write_binary_file', { project: 'hello-views', path: 'gradle/wrapper/gradle-wrapper.jar', base64: big.toString('base64') })).isError, true);
+  // read back: image content the model can see
+  const rd = await rpc('read_binary_file', { project: 'hello-views', path: 'app/src/main/res/mipmap-xxxhdpi/ic_launcher.png' });
+  assert.equal(rd.content[0].type, 'image');
+  assert.equal(rd.content[0].mimeType, 'image/png');
+  assert.deepEqual(Buffer.from(rd.content[0].data, 'base64'), big);
+  const rs = JSON.parse((await rpc('read_binary_file', { project: 'hello-views', path: 'app/src/main/res/raw/tap.mp3' })).content[0].text);
+  assert.equal(rs.mime, 'audio/mpeg');
+  assert.deepEqual(Buffer.from(rs.base64, 'base64'), snd);
+  // replace + undo restores the previous bytes
+  const w2 = JSON.parse((await rpc('write_binary_file', { project: 'hello-views', path: 'app/src/main/res/mipmap-xxxhdpi/ic_launcher.png', base64: tinyPng(1, 1).toString('base64') })).content[0].text);
+  assert.ok(!(await rpc('undo_edits', { project: 'hello-views', undoId: w2.applyId })).isError);
+  assert.deepEqual(fs.readFileSync(path.join(ctx.env.WORKSPACES_DIR, 'hello-views/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png')), big);
+  // move + undo, delete + undo
+  const mv = JSON.parse((await rpc('move_file', { project: 'hello-views', path: 'app/src/main/res/raw/tap.mp3', to: 'app/src/main/res/raw/click.mp3' })).content[0].text);
+  assert.ok(fs.existsSync(path.join(ctx.env.WORKSPACES_DIR, 'hello-views/app/src/main/res/raw/click.mp3')));
+  await rpc('undo_edits', { project: 'hello-views', undoId: mv.applyId });
+  assert.ok(fs.existsSync(path.join(ctx.env.WORKSPACES_DIR, 'hello-views/app/src/main/res/raw/tap.mp3')));
+  assert.ok(!fs.existsSync(path.join(ctx.env.WORKSPACES_DIR, 'hello-views/app/src/main/res/raw/click.mp3')));
+  const del = JSON.parse((await rpc('delete_file', { project: 'hello-views', path: 'app/src/main/res/raw/tap.mp3' })).content[0].text);
+  assert.ok(!fs.existsSync(path.join(ctx.env.WORKSPACES_DIR, 'hello-views/app/src/main/res/raw/tap.mp3')));
+  await rpc('undo_edits', { project: 'hello-views', undoId: del.applyId });
+  assert.deepEqual(fs.readFileSync(path.join(ctx.env.WORKSPACES_DIR, 'hello-views/app/src/main/res/raw/tap.mp3')), snd);
+  assert.ok(!(await rpc('make_dir', { project: 'hello-views', path: 'app/src/main/res/font' })).isError);
+  const ls = JSON.parse((await rpc('list_files', { project: 'hello-views', prefix: 'app/src/main/res/mipmap', detailed: true })).content[0].text);
+  assert.ok(ls.some((f) => f.image?.width === 512));
+  // a ~3 MB file passes the MCP body limit
+  const large = Buffer.alloc(3 * 1024 * 1024, 7);
+  assert.ok(!(await rpc('write_binary_file', { project: 'hello-views', path: 'app/src/main/assets/data.bin', base64: large.toString('base64') })).isError);
+  await api(`${P}/fs`, { method: 'POST', body: { op: 'delete', path: 'evil.svg' } });
+});

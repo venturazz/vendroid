@@ -54,7 +54,8 @@ Version 2.1, branch `feat/android-remote-runner`. Each item has an ID, so you ca
 | ID | Item | Behaviour |
 |---|---|---|
 | E-1 | Explorer | Lazy tree, build/hidden folders toggle, git colours, follows the active tab |
-| E-2 | File ops | New file/folder, rename/move (F2), delete (Del), copy path, add to AI context |
+| E-2 | File ops | New file/folder, rename/move (F2), delete (Del), copy path, add to AI context, **upload** (button, right-click, drag & drop; ≤25 MB, replace prompt), **download** |
+| E-2b | Binary preview | Images open as a preview with pixel size (checkerboard background); sounds/videos with a player; other binaries show size + download. SVG is never served inline |
 | E-3 | Tabs | Multi-tab, dirty marker, middle-click close, restored per project |
 | E-4 | Languages | Kotlin, Java, XML, Gradle (kts and Groovy), JSON, properties/ProGuard, YAML, TOML, Markdown, shell |
 | E-5 | Editing | Search/replace, bracket matching, auto-close, folding, autocomplete (words), multi-cursor |
@@ -138,7 +139,7 @@ Connect by tunnel address, auto-reconnect with back-off, Reconnect / Restart ADB
 |---|---|---|
 | M-1 | MCP | `POST /mcp`, Streamable HTTP (stateless JSON), protocol 2024-11-05 … 2025-11-25 |
 | M-2 | REST | `GET /api/agent/tools`, `POST /api/agent/tools/<name>`; the token also works on the normal REST API |
-| M-3 | Tools | create_project, clone_project, rename_project, delete_project (trash), list_trash, restore_project, git_branches, git_checkout, list_projects, project_info, list_files, read_file, search_code, write_file, apply_edits, undo_edits, git_status, git_diff, git_commit, git_pull, git_push, start_build (waitSeconds ≤ 900), get_build, play_check, list_builds, cancel_build, analyze_build_error, list_devices, connect_device, device_action, screenshot (image), logcat |
+| M-3 | Tools | read_binary_file (images returned as images), write_binary_file (base64, ≤25 MB, PNG/WebP/JPEG validated, Android resource-name check), delete_file, move_file, make_dir (all with undo), create_project, clone_project, rename_project, delete_project (trash), list_trash, restore_project, git_branches, git_checkout, list_projects, project_info, list_files, read_file, search_code, write_file, apply_edits, undo_edits, git_status, git_diff, git_commit, git_pull, git_push, start_build (waitSeconds ≤ 900), get_build, play_check, list_builds, cancel_build, analyze_build_error, list_devices, connect_device, device_action, screenshot (image), logcat |
 | M-4 | Read-only mode | `MCP_ALLOW_WRITE=false` hides/blocks write tools |
 | M-5 | Reachability | Host: `127.0.0.1:3080/mcp`; containers: `https://<domain>/mcp` or the `edge` container on a shared network |
 

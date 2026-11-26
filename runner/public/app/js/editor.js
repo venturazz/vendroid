@@ -107,7 +107,7 @@ export async function openFile(path, { line, preview = false } = {}) {
     host().append(pane);
     t = { id: `f:${path}`, kind: 'file', path, title: basename(path), hash: f.hash, dirty: false, pane };
     if (f.content === undefined) {
-      pane.append(el('div', { class: 'notice', text: f.binary ? `${path} is a binary file (${f.size} bytes).` : `${path} is too large to edit in the browser (${f.size} bytes).` }));
+      pane.append(binaryPreview(path, f));
       t.readOnly = true;
     } else {
       t.editor = makeEditor(pane, {
@@ -127,6 +127,30 @@ export async function openFile(path, { line, preview = false } = {}) {
   activate(t);
   if (line && t.editor) t.editor.revealLine(line);
   return t;
+}
+
+const rawUrl = (path, dl) => `/api/projects/${encodeURIComponent(app.project.id)}/raw?path=${encodeURIComponent(path)}${dl ? '&download=1' : ''}`;
+function binaryPreview(path, f) {
+  const box = el('div', { class: 'binview' });
+  const ext = path.toLowerCase().split('.').pop();
+  const meta = el('div', { class: 'muted small' });
+  const size = f.size > 1e6 ? `${(f.size / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1e3))} kB`;
+  meta.textContent = `${path} · ${size}`;
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)) {
+    const img = el('img', { src: `${rawUrl(path)}&t=${f.hash || Date.now()}`, alt: path });
+    img.addEventListener('load', () => { meta.textContent = `${path} · ${img.naturalWidth}×${img.naturalHeight} px · ${size}`; });
+    box.append(el('div', { class: 'checker' }, img));
+  } else if (['mp3', 'ogg', 'wav', 'm4a'].includes(ext)) {
+    box.append(el('audio', { controls: true, src: rawUrl(path) }));
+  } else if (['mp4', 'webm'].includes(ext)) {
+    box.append(el('video', { controls: true, src: rawUrl(path) }));
+  } else if (f.tooLarge) {
+    box.append(el('p', { class: 'muted', text: 'Too large to edit in the browser.' }));
+  } else {
+    box.append(el('p', { class: 'muted', text: 'Binary file (no text preview).' }));
+  }
+  box.append(meta, el('a', { class: 'btn', href: rawUrl(path, true), text: '⬇ Download' }));
+  return box;
 }
 
 /** Read-only diff tab (git or AI). */

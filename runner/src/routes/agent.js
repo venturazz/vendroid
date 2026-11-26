@@ -15,20 +15,20 @@ export function register(router, { agentTools }) {
     const r = await handleMcp(body, agentTools);
     if (r.status === 202) { res.writeHead(202); return res.end(); }
     sendJson(res, r.status, r.body);
-  }, { jsonAny: true });
+  }, { jsonAny: true, maxBytes: 40 * 1024 * 1024 });
   router.get('/mcp', (req, res) => sendJson(res, 405, { error: 'Use POST (stateless Streamable HTTP)' }, { Allow: 'POST' }), { public: true });
 
   // REST mirror of the MCP tools.
   router.get('/api/agent/tools', (req, res) => sendJson(res, 200, { tools: agentTools.list() }));
   router.post('/api/agent/tools/:name', async (req, res, { params, body }) => {
     requireToken(req);
-    const { image, value } = await agentTools.call(params.name, body);
+    const { image, value, mime } = await agentTools.call(params.name, body);
     if (image) {
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': value.length });
+      res.writeHead(200, { 'Content-Type': mime || 'image/png', 'Content-Length': value.length });
       return res.end(value);
     }
     sendJson(res, 200, { result: value });
-  });
+  }, { maxBytes: 40 * 1024 * 1024 });
 
   // Dashboard: how to connect Hermes (session only, shows the token).
   router.get('/api/agent/info', (req, res) => {

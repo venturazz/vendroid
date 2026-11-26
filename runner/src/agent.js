@@ -1,6 +1,7 @@
 // Tools for agents (Hermes Agent, CLI scripts). Exposed over MCP (POST /mcp, JSON-RPC) and REST
 // (GET /api/agent/tools, POST /api/agent/tools/:name). Same validation as the dashboard; nothing
 // here accepts shell text.
+import fs from 'node:fs';
 import { config } from './config.js';
 import * as adbm from './adb.js';
 import * as ai from './ai.js';
@@ -8,6 +9,7 @@ import * as files from './files.js';
 import * as git from './git.js';
 import * as aicode from './aicode.js';
 import * as play from './play.js';
+import { imageInfo, mimeFor } from './imageinfo.js';
 import { TASKS, HttpError, bad, isSerial, isTcpTarget, isBuildId, isLevel } from './validate.js';
 import { TEMPLATE_IDS } from './projects.js';
 
@@ -108,11 +110,83 @@ export function createAgentTools({ projects, builds, watchdog }) {
     },
     {
       name: 'list_files',
-      description: 'List files of a project (recursive, build output excluded).',
-      inputSchema: obj({ project: S.project, prefix: { type: 'string', description: 'Only paths starting with this' } }, ['project']),
-      run: ({ project, prefix }) => {
-        const all = files.allFiles(proj(project).path, 5000);
-        return prefix ? all.filter((f) => f.startsWith(prefix)) : all;
+      description: 'List files of a project (recursive, build output excluded). detailed=true adds size and, for images, type and pixel size.',
+      inputSchema: obj({ project: S.project, prefix: { type: 'string', description: 'Only paths starting with this' }, detailed: { type: 'boolean', default: false } }, ['project']),
+      run: ({ project, prefix, detailed = false }) => {
+        const p = proj(project);
+        const all = files.allFiles(p.path, 5000).filter((f) => !prefix || f.startsWith(prefix));
+        if (!detailed) return all;
+        return all.slice(0, 2000).map((f) => {
+          const abs = files.resolve(p.path, f);
+          const size = fs.statSync(abs).size;
+          let image;
+          if (/\.(png|jpe?g|webp|gif)$/i.test(f) && size < files.MAX_BINARY) {
+            const fd = fs.openSync(abs, 'r');
+            const head = Buffer.alloc(Math.min(size, 65536));
+            fs.readSync(fd, head, 0, head.length, 0);
+            fs.closeSync(fd);
+            image = imageInfo(head) || undefined;
+          }
+          return { path: f, size, ...(image ? { image } : {}) };
+        });
+      },
+    },
+    {
+      name: 'read_binary_file',
+      description: 'Read any file as bytes. Images (png/jpg/webp/gif) come back as an image you can see; other files (sounds, fonts, …) as base64. Max 25 MB.',
+      inputSchema: obj({ project: S.project, path: S.path }, ['project', 'path']),
+      binary: true,
+      run: ({ project, path: rel }) => {
+        const buf = files.readBytes(proj(project).path, rel);
+        const info = imageInfo(buf);
+        if (info && info.type !== 'svg') return { kind: 'image', mime: `image/${info.type}`, data: buf, meta: { path: rel, size: buf.length, ...info } };
+        return { kind: 'json', value: { path: rel, size: buf.length, mime: mimeFor(rel), sha1: files.sha1(buf), base64: buf.toString('base64') } };
+      },
+    },
+    {
+      name: 'write_binary_file',
+      description: 'Create or replace a binary file from base64: PNG/WebP icons and images (e.g. app/src/main/res/mipmap-xxhdpi/ic_launcher.png), sounds (res/raw/*.mp3|ogg|wav), fonts (res/font/*.ttf), assets. Max 25 MB. Returns size, image dimensions and an undo id. Android resource file names must be lowercase a-z, 0-9 and _.',
+      inputSchema: obj({ project: S.project, path: S.path, base64: { type: 'string', description: 'File content, base64 (a data: URL prefix is allowed)' } }, ['project', 'path', 'base64']),
+      write: true,
+      run: ({ project, path: rel, base64 }) => {
+        const p = proj(project);
+        const b64 = String(base64).replace(/^data:[^,]*,/, '').replace(/\s+/g, '');
+        if (!/^[A-Za-z0-9+/=_-]*$/.test(b64)) throw bad('base64 contains invalid characters');
+        const bytes = Buffer.from(b64.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+        if (!bytes.length) throw bad('decoded content is empty');
+        if (/(^|\/)res\/[a-z]+(-[a-z0-9]+)*\/[^/]+$/.test(rel) && !/\/[a-z0-9_]+(\.9)?\.[a-z0-9]+$/.test(rel)) {
+          throw bad('Android resource file names must be lowercase letters, digits and _ (e.g. ic_launcher.png)');
+        }
+        const info = imageInfo(bytes);
+        const ext = rel.toLowerCase().split('.').pop();
+        if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext) && (!info || (info.type !== ext && !(ext === 'jpg' && info.type === 'jpeg')))) {
+          throw bad(`Content is not a valid .${ext} image${info ? ` (looks like ${info.type})` : ''}`);
+        }
+        return { ...aicode.fileOp(p, { type: 'write', path: rel, bytes }), ...(info ? { image: info } : {}) };
+      },
+    },
+    {
+      name: 'delete_file',
+      description: 'Delete a file (any type). Undo with undo_edits and the returned undo id. Folders: move or git.',
+      inputSchema: obj({ project: S.project, path: S.path }, ['project', 'path']),
+      write: true,
+      run: ({ project, path: rel }) => aicode.fileOp(proj(project), { type: 'delete', path: rel }),
+    },
+    {
+      name: 'move_file',
+      description: 'Rename or move a file inside the project (any type), with undo.',
+      inputSchema: obj({ project: S.project, path: S.path, to: { type: 'string', description: 'New path relative to the project root' } }, ['project', 'path', 'to']),
+      write: true,
+      run: ({ project, path: rel, to }) => aicode.fileOp(proj(project), { type: 'move', path: rel, to }),
+    },
+    {
+      name: 'make_dir',
+      description: 'Create a folder (and parents), e.g. app/src/main/res/raw.',
+      inputSchema: obj({ project: S.project, path: S.path }, ['project', 'path']),
+      write: true,
+      run: ({ project, path: rel }) => {
+        if (aicode.FORBIDDEN.test(rel)) throw bad('path not allowed');
+        return files.mkdir(proj(project).path, rel);
       },
     },
     {
@@ -351,7 +425,10 @@ export function createAgentTools({ projects, builds, watchdog }) {
       if (extra.length) throw bad(`Unknown argument(s): ${extra.join(', ')}`);
       for (const k of t.inputSchema.required) if (args[k] === undefined) throw bad(`Missing argument: ${k}`);
       const value = await t.run(args);
-      return { image: !!t.image, value };
+      if (t.image) return { image: true, mime: 'image/png', value };
+      if (t.binary && value.kind === 'image') return { image: true, mime: value.mime, value: value.data, meta: value.meta };
+      if (t.binary) return { image: false, value: value.value };
+      return { image: false, value };
     },
   };
 }

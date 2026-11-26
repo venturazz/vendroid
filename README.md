@@ -70,7 +70,7 @@ Full feature list with IDs: **[docs/SPEC.md](docs/SPEC.md)**. Planned work: **[d
 
 **Agents**
 - `POST /mcp` (MCP Streamable HTTP) and `/api/agent/tools/*` (REST) with a bearer token.
-- 24 tools (incl. `play_check`): projects, files, search, edits (with undo), git, builds (blocking wait), devices, install/launch/stop/clear,
+- 37 tools (incl. `play_check`, binary files, project create/delete): projects, files, search, edits (with undo), git, builds (blocking wait), devices, install/launch/stop/clear,
   screenshot (image), logcat, 9Router analysis.
 
 **Kept from v1:** the ARM64 toolchain (box64 + Google's aapt2, native aarch64 build tools), resource caps, ADB tunnel
