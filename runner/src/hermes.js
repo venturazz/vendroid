@@ -4,6 +4,8 @@
 // and keeps one Hermes session per project (X-Hermes-Session-Id).
 import fs from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
+import https from 'node:https';
 import { config } from './config.js';
 import { loadHistory, saveHistory } from './aicode.js';
 import { sliceBuildError } from './ai.js';
@@ -16,6 +18,25 @@ const writeSession = (id, s) => {
   fs.mkdirSync(path.dirname(sessionFile(id)), { recursive: true });
   fs.writeFileSync(sessionFile(id), JSON.stringify(s));
 };
+/**
+ * POST with node:http(s) instead of fetch: fetch (undici) drops a response after 300 s without a
+ * byte, and a Hermes turn can be silent that long (a long tool run or an approval wait). No idle
+ * timeout here; the IDE's Stop button / closed tab aborts through `signal`.
+ */
+function streamPost(url, headers, body, signal) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = (u.protocol === 'https:' ? https : http).request(u, { method: 'POST', headers: { ...headers, 'Content-Length': Buffer.byteLength(body) }, signal }, resolve);
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+async function readAll(res) {
+  let s = '';
+  for await (const c of res) s += c;
+  return s;
+}
+
 export const clearSession = (projectId) => fs.rmSync(sessionFile(projectId), { force: true });
 
 function header(p, opts) {
@@ -44,19 +65,19 @@ export async function chat(p, opts, prov, onEvent, signal) {
   const content = `${header(p, opts)}\n\n${opts.message}`;
   let res;
   try {
-    res = await fetch(`${prov.baseUrl}/chat/completions`, {
-      method: 'POST', headers, signal,
-      body: JSON.stringify({ model: prov.model || 'hermes-agent', stream: true, messages: [{ role: 'user', content }] }),
-    });
+    res = await streamPost(`${prov.baseUrl}/chat/completions`, headers,
+      JSON.stringify({ model: prov.model || 'hermes-agent', stream: true, messages: [{ role: 'user', content }] }), signal);
   } catch (e) {
-    throw new HttpError(502, `Hermes API unreachable at ${prov.baseUrl}: ${e.message}`);
+    if (signal?.aborted) throw e;
+    throw new HttpError(502, `Hermes API unreachable at ${prov.baseUrl}: ${e.code || e.message}`);
   }
-  if (res.status === 404 && headers['X-Hermes-Session-Id']) {
+  if (res.statusCode === 404 && headers['X-Hermes-Session-Id']) {
+    res.resume();
     clearSession(p.id); // session was deleted in Hermes: start a fresh one
     return chat(p, opts, prov, onEvent, signal);
   }
-  if (!res.ok) throw new HttpError(502, `Hermes API returned ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const sid = res.headers.get('x-hermes-session-id');
+  if (res.statusCode < 200 || res.statusCode >= 300) throw new HttpError(502, `Hermes API returned ${res.statusCode}: ${(await readAll(res)).slice(0, 300)}`);
+  const sid = res.headers['x-hermes-session-id'];
   if (sid) writeSession(p.id, { sessionId: sid, providerId: prov.id, at: new Date().toISOString() });
 
   let text = '';
@@ -81,12 +102,13 @@ export async function chat(p, opts, prov, onEvent, signal) {
       if (j.error) onEvent('status', { error: j.error.message || String(j.error) });
     }
   };
-  if (!(res.headers.get('content-type') || '').includes('event-stream')) {
-    const j = await res.json().catch(() => ({}));
+  if (!(res.headers['content-type'] || '').includes('event-stream')) {
+    let j = {};
+    try { j = JSON.parse(await readAll(res)); } catch { /* not JSON */ }
     text = j.choices?.[0]?.message?.content || '';
     if (text) onEvent('delta', { text });
   } else {
-    for await (const chunk of res.body) {
+    for await (const chunk of res) {
       buf += dec.decode(chunk, { stream: true });
       let i;
       while ((i = buf.indexOf('\n\n')) >= 0) {
