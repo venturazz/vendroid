@@ -299,6 +299,8 @@ try {
   const visible = (sel) => page.evaluate((s) => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }, sel);
   await page.click('#mnav [data-mview=files]');
   await page.waitForSelector('body.phone.m-files');
+  if (!(await visible('.activitybar [data-view=git]'))) problems.push('phone: view switcher (explorer/search/git/publish) not visible');
+  await page.click('.activitybar [data-view=explorer]'); // the last sidebar view was Publish
   if (!(await visible('#tree'))) problems.push('phone: file tree not visible in Files view');
   await shot('phone-files');
   await page.click('#tree .node[data-path="app"]');
