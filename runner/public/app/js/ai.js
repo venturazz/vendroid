@@ -28,6 +28,7 @@ export async function loadEngines() {
   for (const p of providers) sel.append(new Option(`${p.kind === 'hermes' ? '🪽 ' : ''}${p.name}${p.builtin ? '' : ' ·'}`, p.id));
   if (!providers.length) sel.append(new Option('No AI provider (Settings)', ''));
   if (providers.some((p) => p.id === want)) sel.value = want;
+  else if (providers.some((p) => p.kind === 'hermes')) sel.value = providers.find((p) => p.kind === 'hermes').id; // prefer Hermes when nothing was picked yet
   onEngineChange(false);
 }
 function onEngineChange(save = true) {
