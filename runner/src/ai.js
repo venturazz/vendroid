@@ -164,9 +164,11 @@ function tcpProbe(urlStr) {
 }
 
 export async function aiStatus() {
-  const [nineRouter, hermes] = await Promise.all([tcpProbe(config.nineRouterUrl), tcpProbe(config.hermesWebhookUrl)]);
+  const [nineRouter, hermes, hermesApi] = await Promise.all([
+    tcpProbe(config.nineRouterUrl), tcpProbe(config.hermesWebhookUrl), config.hermesApiUrl ? tcpProbe(config.hermesApiUrl) : Promise.resolve(null)]);
   return {
     nineRouter: { reachable: nineRouter, url: config.nineRouterUrl, model: config.nineRouterModel, keyConfigured: !!config.nineRouterApiKey },
     hermes: { reachable: hermes, url: config.hermesWebhookUrl, secretConfigured: !!config.hermesWebhookSecret },
+    hermesApi: config.hermesApiUrl ? { reachable: hermesApi, url: config.hermesApiUrl, keyConfigured: !!config.hermesApiKey } : null,
   };
 }

@@ -83,12 +83,13 @@ export function buildContext(p, { activeFile, contextFiles = [], selection, buil
 }
 
 // ------------------------------------------------------------------ history
+export const historyPath = (projectId) => historyFile(projectId);
 const historyFile = (projectId) => path.join(config.projectsDir, projectId, 'chat.json');
 
 export function loadHistory(projectId) {
   try { return JSON.parse(fs.readFileSync(historyFile(projectId), 'utf8')); } catch { return []; }
 }
-function saveHistory(projectId, h) {
+export function saveHistory(projectId, h) {
   fs.mkdirSync(path.dirname(historyFile(projectId)), { recursive: true });
   fs.writeFileSync(historyFile(projectId), JSON.stringify(h.slice(-40), null, 2));
 }
@@ -97,27 +98,26 @@ export function clearHistory(projectId) {
 }
 
 // ------------------------------------------------------------------ 9Router call (streaming)
-async function* streamCompletion(messages, signal) {
-  const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
-  if (config.nineRouterApiKey) headers.Authorization = `Bearer ${config.nineRouterApiKey}`;
+async function* streamCompletion(messages, signal, prov) {
+  const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...(prov.apiKey ? { Authorization: `Bearer ${prov.apiKey}` } : {}) };
   let res;
   try {
-    res = await fetch(`${config.nineRouterUrl}/chat/completions`, {
+    res = await fetch(`${prov.baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
       signal,
-      body: JSON.stringify({ model: config.nineRouterModel, temperature: 0.2, max_tokens: config.aiCodeMaxTokens, stream: true, messages }),
+      body: JSON.stringify({ model: prov.model || 'auto', temperature: 0.2, max_tokens: config.aiCodeMaxTokens, stream: true, messages }),
     });
   } catch (e) {
-    throw new HttpError(502, `9Router unreachable: ${e.message}`);
+    throw new HttpError(502, `${prov.name} unreachable: ${e.message}`);
   }
-  if (!res.ok) throw new HttpError(502, `9Router returned ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw new HttpError(502, `${prov.name} returned ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const ct = res.headers.get('content-type') || '';
   if (!ct.includes('event-stream')) {
     // Some routers ignore stream:true for some models.
     const j = await res.json().catch(() => ({}));
     const t = j.choices?.[0]?.message?.content;
-    if (!t) throw new HttpError(502, '9Router returned an empty completion');
+    if (!t) throw new HttpError(502, `${prov.name} returned an empty completion`);
     yield t;
     return;
   }
@@ -145,7 +145,7 @@ async function* streamCompletion(messages, signal) {
  * One chat turn. Streams text through onDelta; resolves with { message, proposal }.
  * opts: { message, activeFile, contextFiles, selection, buildLog }
  */
-export async function chat(p, opts, onDelta, signal) {
+export async function chat(p, opts, onDelta, signal, prov) {
   if (typeof opts.message !== 'string' || !opts.message.trim() || opts.message.length > 20_000) throw bad('message is required (max 20000 chars)');
   const ctx = buildContext(p, opts);
   const history = loadHistory(p.id);
@@ -157,14 +157,14 @@ export async function chat(p, opts, onDelta, signal) {
     { role: 'user', content: opts.message },
   ];
   let text = '';
-  for await (const d of streamCompletion(messages, signal)) {
+  for await (const d of streamCompletion(messages, signal, prov)) {
     text += d;
     onDelta?.(d);
   }
   const proposal = propose(p, parseEdits(text));
   const now = new Date().toISOString();
   history.push({ role: 'user', content: opts.message, at: now, context: ctx.included });
-  history.push({ role: 'assistant', content: text, at: now, proposalId: proposal?.id || null });
+  history.push({ role: 'assistant', content: text, at: now, proposalId: proposal?.id || null, engine: prov.name, model: prov.model || null });
   saveHistory(p.id, history);
   return { message: text, context: ctx.included, proposal };
 }

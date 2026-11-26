@@ -75,6 +75,9 @@ services:
       NINE_ROUTER_MODEL: ${NINE_ROUTER_MODEL:-auto}
       HERMES_WEBHOOK_URL: ${HERMES_WEBHOOK_URL:-http://127.0.0.1:8644/webhooks/vendroid}
       HERMES_WEBHOOK_SECRET: ${HERMES_WEBHOOK_SECRET:-}
+      HERMES_API_URL: ${HERMES_API_URL:-}
+      HERMES_API_KEY: ${HERMES_API_KEY:-}
+      HERMES_API_MODEL: ${HERMES_API_MODEL:-hermes-agent}
     volumes:
       - android-sdk:/opt/android-sdk   # SDK + aarch64 build-tools
       - gradle-home:/root/.gradle      # dependency + build cache

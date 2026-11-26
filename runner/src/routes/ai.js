@@ -1,6 +1,8 @@
 import { sendJson } from '../http.js';
 import * as ai from '../ai.js';
 import * as aicode from '../aicode.js';
+import * as providers from '../providers.js';
+import * as hermes from '../hermes.js';
 import { HttpError, bad, isBuildId } from '../validate.js';
 import { str, serialOf, pkgOf } from './util.js';
 
@@ -46,6 +48,7 @@ export function register(router, { builds, projects }) {
   router.post('/api/projects/:id/ai/clear', (req, res, { params }) => {
     projects.get(params.id);
     aicode.clearHistory(params.id);
+    hermes.clearSession(params.id);
     sendJson(res, 200, { ok: true });
   });
 
@@ -60,14 +63,19 @@ export function register(router, { builds, projects }) {
       buildLog: body.buildId && isBuildId(body.buildId) ? builds.tail(body.buildId, 600) : undefined,
     };
     if (typeof opts.message !== 'string' || !opts.message.trim()) throw bad('message is required');
+    const prov = providers.resolve(typeof body.providerId === 'string' ? body.providerId : undefined);
+    if (typeof body.model === 'string' && body.model.trim()) prov.model = body.model.trim().slice(0, 200);
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no' });
     const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     const ac = new AbortController();
     res.on('close', () => { if (!res.writableEnded) ac.abort(); });
     const hb = setInterval(() => res.write(': hb\n\n'), 15_000);
     try {
-      const out = await aicode.chat(p, opts, (d) => send('delta', { text: d }), ac.signal);
-      send('done', out);
+      send('engine', { id: prov.id, name: prov.name, kind: prov.kind, model: prov.model || null });
+      const out = prov.kind === 'hermes'
+        ? await hermes.chat(p, opts, prov, (type, data) => send(type, data), ac.signal)
+        : await aicode.chat(p, opts, (d) => send('delta', { text: d }), ac.signal, prov);
+      send('done', { ...out, engine: prov.kind });
     } catch (e) {
       if (!ac.signal.aborted) send('error', { message: e.message });
     } finally {
@@ -75,6 +83,21 @@ export function register(router, { builds, projects }) {
       res.end();
     }
   });
+  router.post('/api/projects/:id/ai/hermes-approval', async (req, res, { params, body }) => {
+    projects.get(params.id);
+    const prov = providers.resolve(body.providerId);
+    if (prov.kind !== 'hermes') throw bad('Not a Hermes provider');
+    sendJson(res, 200, await hermes.approve(prov, body));
+  });
+
+  // ---- providers (OpenAI-compatible + Hermes API)
+  router.get('/api/ai/providers', (req, res) => sendJson(res, 200, { providers: providers.list(), kinds: providers.KINDS }));
+  router.post('/api/ai/providers', (req, res, { body }) => sendJson(res, 201, providers.add(body)));
+  router.post('/api/ai/providers/:pid', (req, res, { params, body }) => sendJson(res, 200, providers.update(params.pid, body)));
+  router.post('/api/ai/providers/:pid/delete', (req, res, { params }) => sendJson(res, 200, providers.remove(params.pid)));
+  router.get('/api/ai/providers/:pid/models', async (req, res, { params }) => sendJson(res, 200, { models: await providers.models(params.pid) }));
+  router.post('/api/ai/providers/:pid/test', async (req, res, { params, body }) => sendJson(res, 200, await providers.test(params.pid, body.model)));
+
   router.post('/api/projects/:id/ai/apply', (req, res, { params, body }) =>
     sendJson(res, 200, aicode.apply(projects.get(params.id), String(body.proposalId || ''), body.files)));
   router.post('/api/projects/:id/ai/undo', (req, res, { params, body }) =>

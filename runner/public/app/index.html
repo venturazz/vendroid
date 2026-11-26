@@ -188,6 +188,11 @@
     </div>
     <div id="aiMessages" class="ai-messages"></div>
     <div class="ai-compose">
+      <div class="row ai-engine">
+        <select id="aiEngine" title="AI engine (Settings → AI providers)"></select>
+        <input id="aiModel" list="aiModels" placeholder="model" spellcheck="false" title="Model (empty = provider default)">
+        <datalist id="aiModels"></datalist>
+      </div>
       <div id="aiCtx" class="ai-ctx"></div>
       <textarea id="aiInput" rows="3" placeholder="Describe a screen, feature or fix… (Enter to send, Shift+Enter for a new line)"></textarea>
       <div class="row">
@@ -273,6 +278,19 @@
     <tr><td>Hermes webhook</td><td id="hermesInfo"></td></tr>
   </table>
   <details><summary>Hermes Agent config snippet</summary><pre id="hermesSnippet" class="snippet"></pre></details>
+  <h4>AI providers — OpenAI-compatible endpoints and Hermes Agent</h4>
+  <table class="kv" id="provTable"></table>
+  <details id="provAdd"><summary>＋ Add provider</summary>
+    <div class="provform">
+      <label>Name <input id="pvName" placeholder="OpenRouter"></label>
+      <label>Type <select id="pvKind"><option value="openai">OpenAI-compatible (Vendroid edits with diffs)</option><option value="hermes">Hermes Agent API (Hermes works through MCP)</option></select></label>
+      <label>Base URL <input id="pvUrl" placeholder="https://openrouter.ai/api/v1" spellcheck="false"></label>
+      <label>API key <input id="pvKey" type="password" autocomplete="off" placeholder="sk-…"></label>
+      <label>Default model <input id="pvModel" placeholder="e.g. gpt-5.1, anthropic/claude-sonnet-4.6, hermes-agent" spellcheck="false"></label>
+      <div class="row"><button id="pvSave" class="primary small">Save provider</button><span id="pvErr" class="err small"></span></div>
+      <p class="muted small">Examples: OpenAI https://api.openai.com/v1 · OpenRouter https://openrouter.ai/api/v1 · Ollama http://127.0.0.1:11434/v1 · LM Studio http://127.0.0.1:1234/v1 · Hermes http://127.0.0.1:8642/v1 (key = API_SERVER_KEY)</p>
+    </div>
+  </details>
   <h4>Git</h4>
   <p class="muted small" id="gitInfo"></p>
   <h4>Environment</h4>

@@ -545,3 +545,106 @@ test('binary files: dashboard upload/raw and MCP write/read/delete/move with und
   assert.ok(!(await rpc('write_binary_file', { project: 'hello-views', path: 'app/src/main/assets/data.bin', base64: large.toString('base64') })).isError);
   await api(`${P}/fs`, { method: 'POST', body: { op: 'delete', path: 'evil.svg' } });
 });
+
+test('AI providers: add OpenAI-compatible provider (key encrypted), chat uses it', async () => {
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => {
+      seen.push({ url: req.url, auth: req.headers.authorization, body: b ? JSON.parse(b) : null });
+      if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); return res.end('{"data":[{"id":"m-small"},{"id":"m-large"}]}'); }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'hello from custom' } }] })}\n\ndata: [DONE]\n\n`);
+    });
+  }).listen(0, '127.0.0.1');
+  await new Promise((r) => srv.once('listening', r));
+  try {
+    const add = await api('/api/ai/providers', { method: 'POST', body: { name: 'My OpenRouter', kind: 'openai', baseUrl: `http://127.0.0.1:${srv.address().port}/v1/`, apiKey: 'sk-secret-123', model: 'm-small' } });
+    assert.equal(add.status, 201, JSON.stringify(add.data));
+    assert.equal(add.data.id, 'my-openrouter');
+    assert.equal(add.data.hasKey, true);
+    assert.equal(add.data.apiKey, undefined);
+    const list = (await api('/api/ai/providers')).data.providers;
+    assert.deepEqual(list.map((p) => p.id), ['9router', 'my-openrouter']);
+    assert.ok(!JSON.stringify(list).includes('sk-secret-123'));
+    assert.ok(!fs.readFileSync(path.join(ctx.env.DATA_DIR, 'providers.json'), 'utf8').includes('sk-secret-123'), 'key encrypted at rest');
+    assert.deepEqual((await api('/api/ai/providers/my-openrouter/models')).data.models, ['m-small', 'm-large']);
+    assert.equal((await api('/api/ai/providers', { method: 'POST', body: { name: 'x', kind: 'evil', baseUrl: 'http://a' } })).status, 400);
+    assert.equal((await api('/api/ai/providers', { method: 'POST', body: { name: 'x', kind: 'openai', baseUrl: 'file:///etc/passwd' } })).status, 400);
+    const t = (await (await api('/api/projects/hello-views/ai/chat', { method: 'POST', body: { message: 'hi', providerId: 'my-openrouter', model: 'm-large' }, raw: true })).text());
+    assert.match(t, /event: engine\ndata: \{"id":"my-openrouter"/);
+    assert.match(t, /hello from custom/);
+    const chatReq = seen.find((s) => s.url === '/v1/chat/completions');
+    assert.equal(chatReq.auth, 'Bearer sk-secret-123');
+    assert.equal(chatReq.body.model, 'm-large');
+    assert.equal((await api('/api/ai/providers/9router/delete', { method: 'POST' })).status, 409);
+    assert.equal((await api('/api/ai/providers/my-openrouter/delete', { method: 'POST' })).status, 200);
+  } finally { srv.close(); }
+});
+
+test('Hermes engine: streams text, tool progress and approvals; keeps one session per project', async () => {
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => {
+      seen.push({ url: req.url, auth: req.headers.authorization, sid: req.headers['x-hermes-session-id'], body: b ? JSON.parse(b) : null });
+      if (req.url.startsWith('/v1/runs/')) { res.setHeader('content-type', 'application/json'); return res.end('{"status":"ok"}'); }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Hermes-Session-Id': 'sess-abc' });
+      const f = (data, event) => res.write(`${event ? `event: ${event}\n` : ''}data: ${JSON.stringify(data)}\n\n`);
+      f({ choices: [{ delta: { role: 'assistant' } }] });
+      res.write(': keepalive\n\n');
+      f({ tool: 'mcp_vendroid_apply_edits', emoji: '🔧', label: 'apply_edits strings.xml', toolCallId: 'c1', status: 'running' }, 'hermes.tool.progress');
+      f({ run_id: 'chatcmpl-1', request_id: 'p-9', execution_generation: 2, description: 'vendroid/git_push', choices: ['once', 'deny'] }, 'approval.request');
+      f({ choices: [{ delta: { reasoning_content: 'thinking…' } }] });
+      f({ choices: [{ delta: { content: 'Selesai, ' } }] });
+      f({ tool: 'mcp_vendroid_apply_edits', toolCallId: 'c1', status: 'completed' }, 'hermes.tool.progress');
+      f({ choices: [{ delta: { content: 'judul diganti.' } }] });
+      res.end('data: [DONE]\n\n');
+    });
+  }).listen(0, '127.0.0.1');
+  await new Promise((r) => srv.once('listening', r));
+  try {
+    await api('/api/ai/providers', { method: 'POST', body: { name: 'Hermes Agent', kind: 'hermes', baseUrl: `http://127.0.0.1:${srv.address().port}/v1`, apiKey: 'hermes-key', model: 'hermes-agent' } });
+    const P = '/api/projects/hello-views';
+    await api(`${P}/ai/clear`, { method: 'POST' });
+    const t1 = await (await api(`${P}/ai/chat`, { method: 'POST', body: { message: 'Ganti judul', providerId: 'hermes-agent', activeFile: 'app/src/main/res/values/strings.xml' }, raw: true })).text();
+    const evs = t1.split('\n\n').filter(Boolean).map((c) => ({ ev: /^event: (.*)$/m.exec(c)?.[1], data: JSON.parse(/^data: (.*)$/m.exec(c)[1]) }));
+    assert.deepEqual(evs.map((e) => e.ev), ['engine', 'tool', 'approval', 'reasoning', 'delta', 'tool', 'delta', 'done']);
+    assert.equal(evs.find((e) => e.ev === 'approval').data.request_id, 'p-9');
+    const done = evs.at(-1).data;
+    assert.equal(done.message, 'Selesai, judul diganti.');
+    assert.equal(done.engine, 'hermes');
+    assert.equal(done.sessionId, 'sess-abc');
+    const first = seen.find((s) => s.url === '/v1/chat/completions');
+    assert.equal(first.auth, 'Bearer hermes-key');
+    assert.equal(first.sid, undefined, 'first turn starts a new session');
+    assert.equal(first.body.messages.length, 1);
+    assert.match(first.body.messages[0].content, /Project id "hello-views"/);
+    assert.match(first.body.messages[0].content, /Open file in the editor: app\/src\/main\/res\/values\/strings\.xml/);
+    assert.match(first.body.messages[0].content, /Ganti judul$/);
+    await (await api(`${P}/ai/chat`, { method: 'POST', body: { message: 'Lagi', providerId: 'hermes-agent' }, raw: true })).text();
+    assert.equal(seen.filter((s) => s.url === '/v1/chat/completions')[1].sid, 'sess-abc', 'second turn continues the session');
+    const ap = await api(`${P}/ai/hermes-approval`, { method: 'POST', body: { providerId: 'hermes-agent', runId: 'chatcmpl-1', choice: 'once', requestId: 'p-9', executionGeneration: 2 } });
+    assert.equal(ap.status, 200, JSON.stringify(ap.data));
+    const apr = seen.find((s) => s.url === '/v1/runs/chatcmpl-1/approval');
+    assert.deepEqual(apr.body, { choice: 'once', request_id: 'p-9', execution_generation: 2 });
+    assert.equal(apr.auth, 'Bearer hermes-key');
+    const h = (await api(`${P}/ai/history`)).data.messages;
+    assert.equal(h.at(-3).engine, 'Hermes Agent');
+    assert.equal(h.at(-3).tools[0].label, 'apply_edits strings.xml');
+    await api(`${P}/ai/clear`, { method: 'POST' });
+    await (await api(`${P}/ai/chat`, { method: 'POST', body: { message: 'Baru', providerId: 'hermes-agent' }, raw: true })).text();
+    assert.equal(seen.filter((s) => s.url === '/v1/chat/completions').at(-1).sid, undefined, 'clear starts a new Hermes session');
+  } finally { srv.close(); }
+});
+
+test('MCP annotations: side-effect tools are not read-only; destructive ones are marked', async () => {
+  const T = (await api('/api/agent/info')).data.token;
+  const tools = (await api('/mcp', { method: 'POST', token: T, body: { jsonrpc: '2.0', id: 1, method: 'tools/list' } })).data.result.tools;
+  const ann = Object.fromEntries(tools.map((t) => [t.name, t.annotations]));
+  for (const n of ['start_build', 'device_action', 'apply_edits', 'write_binary_file']) assert.equal(ann[n].readOnlyHint, false, n);
+  for (const n of ['list_projects', 'read_file', 'logcat', 'screenshot', 'get_build']) assert.equal(ann[n].readOnlyHint, true, n);
+  for (const n of ['delete_project', 'delete_file', 'git_push']) assert.equal(ann[n].destructiveHint, true, n);
+});

@@ -1,6 +1,6 @@
 // AI coding panel: chat with 9Router about the active project, review proposed edits as diffs,
 // apply with one click (with undo), or hand the task to Hermes Agent.
-import { $, app, pApi, el, toast, guard, busy, postStream, renderDiff, emit, on, pref, setPref, actionButton } from './core.js';
+import { $, app, api, pApi, el, toast, guard, busy, postStream, renderDiff, emit, on, pref, setPref, actionButton, notify } from './core.js';
 import { selectionText, openTabs, openFile, saveAll, reloadFromDisk } from './editor.js';
 
 const extraContext = new Set();
@@ -17,15 +17,73 @@ export function toggleAi(show = $('aipanel').hidden) {
   if (show) $('aiInput').focus();
 }
 
+// ---- engines (Settings → AI providers)
+let providers = [];
+const engine = () => providers.find((p) => p.id === $('aiEngine').value) || providers[0];
+export async function loadEngines() {
+  try { providers = (await api('/api/ai/providers')).providers; } catch { providers = []; }
+  const sel = $('aiEngine');
+  const want = pref(`aiEngine:${app.project?.id}`, pref('aiEngine', ''));
+  sel.textContent = '';
+  for (const p of providers) sel.append(new Option(`${p.kind === 'hermes' ? '🪽 ' : ''}${p.name}${p.builtin ? '' : ' ·'}`, p.id));
+  if (!providers.length) sel.append(new Option('No AI provider (Settings)', ''));
+  if (providers.some((p) => p.id === want)) sel.value = want;
+  onEngineChange(false);
+}
+function onEngineChange(save = true) {
+  const p = engine();
+  if (save && p) { setPref(`aiEngine:${app.project?.id}`, p.id); setPref('aiEngine', p.id); }
+  $('aiModel').value = pref(`aiModel:${p?.id}`, '');
+  $('aiModel').placeholder = p?.model ? `default: ${p.model}` : 'model';
+  $('aiHermes').hidden = p?.kind === 'hermes';
+  $('aiInput').placeholder = p?.kind === 'hermes'
+    ? 'Chat with Hermes: it edits, builds and tests through Vendroid itself (Enter to send)'
+    : 'Describe a screen, feature or fix… (Enter to send, Shift+Enter for a new line)';
+  const dl = $('aiModels');
+  dl.textContent = '';
+  if (p) api(`/api/ai/providers/${encodeURIComponent(p.id)}/models`).then((r) => r.models.forEach((m) => dl.append(el('option', { value: m })))).catch(() => {});
+}
+$('aiEngine').addEventListener('change', () => onEngineChange());
+$('aiModel').addEventListener('change', () => { const p = engine(); if (p) setPref(`aiModel:${p.id}`, $('aiModel').value.trim()); });
+on('providers-changed', () => loadEngines());
+
+function toolRow(box, ev) {
+  let row = box.querySelector(`[data-call="${CSS.escape(ev.toolCallId || '')}"]`);
+  if (!row) {
+    row = el('div', { class: 'toolrow', dataset: { call: ev.toolCallId || '' } },
+      el('span', { class: 'st', text: '⏳' }), el('span', { text: `${ev.emoji || '🔧'} ${ev.label || ev.tool}` }));
+    box.append(row);
+  }
+  if (ev.status === 'completed') { row.classList.add('done'); row.querySelector('.st').textContent = '✔'; }
+}
+
+function approvalCard(ev, prov) {
+  const choices = ev.choices || ['once', 'deny'];
+  const label = { once: 'Allow once', session: 'Allow this chat', always: 'Always allow', deny: 'Deny' };
+  const card = el('div', { class: 'approval' },
+    el('b', { text: '⚠ Hermes asks for permission' }),
+    el('div', { text: ev.description || ev.command || ev.tool || 'Tool call' }));
+  const row = el('div', { class: 'row' });
+  for (const c of choices) {
+    row.append(actionButton({ class: c === 'deny' ? 'danger' : c === 'once' ? 'primary' : '', text: label[c] || c }, async () => {
+      await pApi('/ai/hermes-approval', { method: 'POST', body: { providerId: prov.id, runId: ev.run_id || ev.runId, choice: c, requestId: ev.request_id || ev.prompt_id, executionGeneration: ev.execution_generation } });
+      row.replaceWith(el('div', { class: 'muted', text: c === 'deny' ? '✖ Denied' : `✔ ${label[c]}` }));
+    }));
+  }
+  card.append(row);
+  return card;
+}
+
 export async function loadAi() {
   extraContext.clear();
+  await loadEngines();
   renderCtx();
   const box = $('aiMessages');
   box.textContent = '';
   let msgs = [];
   try { msgs = (await pApi('/ai/history')).messages; } catch { /* none */ }
   if (!msgs.length) return renderEmpty();
-  for (const m of msgs) box.append(messageEl(m.role, m.content, { context: m.context }));
+  for (const m of msgs) box.append(messageEl(m.role, m.content, { context: m.context, engine: m.engine, tools: m.tools }));
   box.scrollTop = box.scrollHeight;
 }
 
@@ -78,11 +136,12 @@ function renderBody(text, body) {
   flush();
 }
 
-function messageEl(role, content, { context } = {}) {
+function messageEl(role, content, { context, engine: eng, tools } = {}) {
   const body = el('div', { class: 'body' });
   if (role === 'assistant') renderBody(content, body); else body.textContent = content;
   return el('div', { class: `msg ${role}` },
-    el('div', { class: 'who', text: role === 'user' ? 'YOU' : 'ASSISTANT' }),
+    el('div', { class: 'who', text: role === 'user' ? 'YOU' : (eng || 'ASSISTANT').toUpperCase() }),
+    tools?.length ? el('div', { class: 'tools' }, tools.map((t) => el('div', { class: 'toolrow done' }, el('span', { class: 'st', text: '✔' }), el('span', { text: `🔧 ${t.label || t.tool}` })))) : null,
     body,
     role === 'user' && context?.length ? el('div', { class: 'ctxlist', text: `context: ${context.join(', ')}` }) : null);
 }
@@ -179,8 +238,14 @@ async function send() {
   box.querySelector('.ai-empty')?.remove();
   const ctx = [...new Set([currentFile, ...extraContext].filter(Boolean))];
   box.append(messageEl('user', text, { context: ctx }));
-  const reply = messageEl('assistant', '');
+  const prov = engine();
+  if (!prov) { toast('Add an AI provider in Settings first', 'err'); return; }
+  const reply = messageEl('assistant', '', { engine: prov.name });
   reply.classList.add('thinking');
+  const toolsBox = el('div', { class: 'tools' });
+  const reasoning = el('div', { class: 'reasoning', hidden: true });
+  reply.insertBefore(toolsBox, reply.querySelector('.body'));
+  reply.insertBefore(reasoning, toolsBox);
   box.append(reply);
   box.scrollTop = box.scrollHeight;
   $('aiInput').value = '';
@@ -192,6 +257,7 @@ async function send() {
   const bodyEl = reply.querySelector('.body');
   try {
     await postStream(`/api/projects/${encodeURIComponent(app.project.id)}/ai/chat`, {
+      providerId: prov.id, ...($('aiModel').value.trim() ? { model: $('aiModel').value.trim() } : {}),
       message: text, activeFile: currentFile || undefined, contextFiles: [...extraContext],
       selection: selectionText() || undefined,
       ...($('aiWithBuild').checked && latestFailedBuild ? { buildId: latestFailedBuild } : {}),
@@ -203,9 +269,24 @@ async function send() {
           renderBody(acc, bodyEl);
           box.scrollTop = box.scrollHeight;
         }
+      } else if (ev === 'reasoning') {
+        reasoning.hidden = false;
+        reasoning.textContent += data.text;
+        reasoning.scrollTop = reasoning.scrollHeight;
+      } else if (ev === 'tool') {
+        toolRow(toolsBox, data);
+        box.scrollTop = box.scrollHeight;
+        if (data.status === 'completed') { emit('files-changed'); emit('fs-changed'); }
+      } else if (ev === 'approval') {
+        toolsBox.append(approvalCard(data, prov));
+        box.scrollTop = box.scrollHeight;
+        notify('Hermes needs your approval', data.description || data.tool || '');
+      } else if (ev === 'status' && data.error) {
+        reply.append(el('div', { class: 'err', text: `⚠ ${data.error}` }));
       } else if (ev === 'done') {
         renderBody(data.message, bodyEl);
         if (data.proposal?.files?.length || data.proposal?.errors?.length) reply.append(proposalEl(data.proposal));
+        if (data.engine === 'hermes') { emit('files-changed'); emit('fs-changed'); }
       } else if (ev === 'error') {
         throw new Error(data.message);
       }

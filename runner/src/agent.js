@@ -291,6 +291,7 @@ export function createAgentTools({ projects, builds, watchdog }) {
         serial: S.serial,
         waitSeconds: { type: 'integer', minimum: 0, maximum: 900, default: 0 },
       }, ['project']),
+      sideEffect: true,
       run: async ({ project, task = 'assembleDebug', install = false, launch = false, gitPull = false, serial, waitSeconds = 0 }) => {
         const p = proj(project);
         const dev = install || launch ? await device(serial) : undefined;
@@ -326,6 +327,7 @@ export function createAgentTools({ projects, builds, watchdog }) {
       name: 'cancel_build',
       description: 'Cancel a queued or running build.',
       inputSchema: obj({ buildId: { type: 'string' } }, ['buildId']),
+      sideEffect: true,
       run: ({ buildId }) => builds.cancel(buildId),
     },
     {
@@ -359,6 +361,7 @@ export function createAgentTools({ projects, builds, watchdog }) {
       name: 'connect_device',
       description: 'adb connect to a phone over the VPN tunnel.',
       inputSchema: obj({ target: { type: 'string', description: '<tunnel_ip>:<port>' } }, ['target']),
+      sideEffect: true,
       run: ({ target }) => {
         if (!isTcpTarget(target)) throw bad('target must be <ipv4>:<port>');
         watchdog.noteManual('connect', target);
@@ -372,6 +375,7 @@ export function createAgentTools({ projects, builds, watchdog }) {
         action: { type: 'string', enum: ['install', 'launch', 'stop', 'clear'] },
         project: S.project, serial: S.serial, buildId: { type: 'string' },
       }, ['action', 'project']),
+      sideEffect: true,
       run: async ({ action, project, serial, buildId }) => {
         const p = proj(project);
         const s = await device(serial);
@@ -414,7 +418,10 @@ export function createAgentTools({ projects, builds, watchdog }) {
 
   return {
     list: () => tools.filter((t) => config.mcpAllowWrite || !t.write)
-      .map(({ name, description, inputSchema, write }) => ({ name, description, inputSchema, annotations: { readOnlyHint: !write } })),
+      .map(({ name, description, inputSchema, write, sideEffect }) => ({
+        name, description, inputSchema,
+        annotations: { readOnlyHint: !write && !sideEffect, ...(['delete_project', 'delete_file', 'git_push'].includes(name) ? { destructiveHint: true } : {}) },
+      })),
     async call(name, args = {}) {
       const t = byName.get(name);
       if (!t) throw new HttpError(404, `Unknown tool ${name}`);

@@ -109,6 +109,10 @@ export const config = {
   nineRouterModel: env.NINE_ROUTER_MODEL || 'auto',
   hermesWebhookUrl: env.HERMES_WEBHOOK_URL || 'http://127.0.0.1:8644/webhooks/vendroid',
   hermesWebhookSecret: env.HERMES_WEBHOOK_SECRET || '',
+  // Hermes Agent API server (OpenAI-compatible, port 8642): chat with Hermes inside the IDE.
+  hermesApiUrl: (env.HERMES_API_URL || '').replace(/\/+$/, ''),
+  hermesApiKey: env.HERMES_API_KEY || '',
+  hermesApiModel: env.HERMES_API_MODEL || 'hermes-agent',
   aiTimeoutMs: int('AI_TIMEOUT_SEC', 90) * 1000,
 };
 

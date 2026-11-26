@@ -1,5 +1,5 @@
 // Settings dialog: agent (MCP/REST) connection details, git identity, environment checks.
-import { $, app, api, el, toast, guard } from './core.js';
+import { $, app, api, el, toast, guard, emit, actionButton } from './core.js';
 
 let info = null;
 const CHECK_LABELS = {
@@ -41,6 +41,7 @@ export async function openSettings() {
   ].join('\n');
   $('gitInfo').textContent = `Commits as ${app.cfg.gitIdentity?.name} <${app.cfg.gitIdentity?.email}> (GIT_USER_NAME / GIT_USER_EMAIL). `
     + (app.cfg.gitTokenConfigured ? 'GIT_TOKEN is set: clone, pull and push work for private HTTPS repositories.' : 'No GIT_TOKEN: public repositories only, unless the remote URL contains a token.');
+  await renderProviders();
   try {
     const h = await api('/api/health/env');
     const t = $('envTable');
@@ -77,4 +78,49 @@ document.querySelectorAll('#dlgSettings [data-copy]').forEach((b) => b.addEventL
   try { await navigator.clipboard.writeText(text); toast('Copied', 'ok'); } catch { toast('Clipboard not available (HTTPS required)', 'err'); }
 }));
 $('settingsClose').addEventListener('click', () => $('dlgSettings').close());
+
+async function renderProviders() {
+  const t = $('provTable');
+  t.textContent = '';
+  let list = [];
+  try { list = (await api('/api/ai/providers')).providers; } catch (e) { t.append(el('tr', {}, el('td', { text: e.message }))); return; }
+  for (const p of list) {
+    const status = el('span', { class: 'muted small' });
+    t.append(el('tr', {},
+      el('td', {}, el('b', { text: p.name }), ' ', el('span', { class: `tag ${p.kind === 'hermes' ? 'hermes' : ''}`, text: p.kind === 'hermes' ? 'Hermes' : 'OpenAI-compatible' })),
+      el('td', {},
+        el('code', { text: p.baseUrl }), ` · model ${p.model || '(default)'} · key ${p.hasKey ? '✔' : '—'}${p.builtin ? ' · from env' : ''} `,
+        actionButton({ class: 'small', text: 'Test' }, async () => {
+          status.textContent = 'testing…';
+          const r = await api(`/api/ai/providers/${encodeURIComponent(p.id)}/test`, { method: 'POST', body: {} });
+          status.textContent = r.ok ? `✔ ${r.latencyMs} ms · "${r.reply}"` : `✖ ${r.status || ''} ${r.error}`;
+          status.className = r.ok ? 'okc small' : 'badc small';
+        }), ' ',
+        p.builtin ? null : actionButton({ class: 'small danger', text: 'Delete' }, async () => {
+          if (!confirm(`Delete provider ${p.name}?`)) return;
+          await api(`/api/ai/providers/${encodeURIComponent(p.id)}/delete`, { method: 'POST', body: {} });
+          emit('providers-changed');
+          renderProviders();
+        }), ' ', status)));
+  }
+  if (!list.length) t.append(el('tr', {}, el('td', { text: 'No providers yet.' })));
+}
+$('pvKind').addEventListener('change', () => {
+  if ($('pvKind').value === 'hermes') {
+    if (!$('pvUrl').value) $('pvUrl').value = 'http://127.0.0.1:8642/v1';
+    if (!$('pvModel').value) $('pvModel').value = 'hermes-agent';
+    if (!$('pvName').value) $('pvName').value = 'Hermes Agent';
+  }
+});
+$('pvSave').addEventListener('click', guard(async () => {
+  $('pvErr').textContent = '';
+  try {
+    await api('/api/ai/providers', { method: 'POST', body: { name: $('pvName').value.trim(), kind: $('pvKind').value, baseUrl: $('pvUrl').value.trim(), apiKey: $('pvKey').value, model: $('pvModel').value.trim() } });
+  } catch (e) { $('pvErr').textContent = e.message; return; }
+  for (const id of ['pvName', 'pvUrl', 'pvKey', 'pvModel']) $(id).value = '';
+  $('provAdd').open = false;
+  toast('Provider saved. Pick it in the AI panel.', 'ok');
+  emit('providers-changed');
+  renderProviders();
+}));
 export { CHECK_LABELS };
