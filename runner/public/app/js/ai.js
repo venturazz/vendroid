@@ -135,9 +135,10 @@ export async function loadAi() {
   box.textContent = '';
   let msgs = [];
   try { msgs = (await pApi('/ai/history')).messages; } catch { /* none */ }
-  if (!msgs.length) return renderEmpty();
+  if (!msgs.length) { renderEmpty(); resumeActive(); return; }
   for (const m of msgs) box.append(messageEl(m.role, m.content, { context: m.context, engine: m.engine, tools: m.tools }));
   box.scrollTop = box.scrollHeight;
+  resumeActive();
 }
 
 function renderEmpty() {
@@ -287,17 +288,56 @@ $('aiAddFile').addEventListener('click', guard(async () => {
 }));
 
 // ---- send
+// A turn is a job on the server. The POST streams its events; if that connection drops (phone
+// locked, proxy timeout, network blip) the turn keeps running and we re-attach to
+// /ai/jobs/:id/events, which replays what we missed. Reopening the project re-attaches too.
+let currentJob = null; // { id, stopped }
+
+/** Follow a job over EventSource from event `after`; resolves when the job ends. */
+function followJob(jobId, after, onEvent, signal) {
+  return new Promise((resolve, reject) => {
+    const es = new EventSource(`/api/projects/${encodeURIComponent(app.project.id)}/ai/jobs/${encodeURIComponent(jobId)}/events?after=${after}`);
+    let fails = 0;
+    const close = (fn) => { es.close(); signal?.removeEventListener('abort', onAbort); fn(); };
+    const onAbort = () => close(resolve);
+    signal?.addEventListener('abort', onAbort);
+    const fwd = (name) => es.addEventListener(name, (e) => { fails = 0; onEvent(name, JSON.parse(e.data), e.lastEventId); });
+    ['engine', 'run', 'delta', 'reasoning', 'tool', 'approval', 'status', 'done'].forEach(fwd);
+    es.addEventListener('end', () => close(resolve));
+    es.addEventListener('error', (e) => {
+      if (e.data) { onEvent('error', JSON.parse(e.data), e.lastEventId); return; } // the turn failed
+      // connection problem: EventSource retries by itself (with Last-Event-ID); give up if the job is gone
+      if (es.readyState === EventSource.CLOSED || ++fails > 40) close(() => reject(new Error('Lost the connection to the runner')));
+    });
+  });
+}
+
 async function send() {
   const text = $('aiInput').value.trim();
   if (!text || sending) return;
-  await saveAll();
-  const box = $('aiMessages');
-  box.querySelector('.ai-empty')?.remove();
-  const ctx = [...new Set([currentFile, ...extraContext].filter(Boolean))];
-  box.append(messageEl('user', text, { context: ctx }));
   const prov = engine();
   if (!prov) { toast('Add an AI provider in Settings first', 'err'); return; }
-  const reply = messageEl('assistant', '', { engine: prov.name });
+  await saveAll();
+  const ctx = [...new Set([currentFile, ...extraContext].filter(Boolean))];
+  $('aiInput').value = '';
+  setPref(`aiDraft:${app.project.id}`, '');
+  await runTurn({
+    text, ctx, prov,
+    body: {
+      providerId: prov.id, ...($('aiModel').value.trim() ? { model: $('aiModel').value.trim() } : {}),
+      message: text, activeFile: currentFile || undefined, contextFiles: [...extraContext],
+      selection: selectionText() || undefined,
+      ...($('aiWithBuild').checked && latestFailedBuild ? { buildId: latestFailedBuild } : {}),
+    },
+  });
+}
+
+/** Render one turn. Either starts it (body) or attaches to a running job (job). */
+async function runTurn({ text, ctx, prov, body, job }) {
+  const box = $('aiMessages');
+  box.querySelector('.ai-empty')?.remove();
+  box.append(messageEl('user', text, { context: ctx }));
+  const reply = messageEl('assistant', '', { engine: prov?.name || job?.engine });
   reply.classList.add('thinking');
   const think = foldBox('reasoning', '💭 Thinking…', true);
   think.d.hidden = true;
@@ -306,60 +346,95 @@ async function send() {
   const reasoning = think.body;
   reply.insertBefore(act.d, reply.querySelector('.body'));
   reply.insertBefore(think.d, act.d);
-  const t0 = Date.now();
+  const t0 = job ? Date.parse(job.startedAt) : Date.now();
   let statusText = '';
   activitySummary(act, { running: true });
   app.aiRunning = true;
   box.append(reply);
   box.scrollTop = box.scrollHeight;
-  $('aiInput').value = '';
-  setPref(`aiDraft:${app.project.id}`, '');
   sending = new AbortController();
   $('aiSend').textContent = 'Stop';
   let acc = '';
   let lastRender = 0;
+  let last = 0;
+  let finished = false;
+  let failure = null;
+  let isHermes = prov?.kind === 'hermes';
   const bodyEl = reply.querySelector('.body');
-  try {
-    await postStream(`/api/projects/${encodeURIComponent(app.project.id)}/ai/chat`, {
-      providerId: prov.id, ...($('aiModel').value.trim() ? { model: $('aiModel').value.trim() } : {}),
-      message: text, activeFile: currentFile || undefined, contextFiles: [...extraContext],
-      selection: selectionText() || undefined,
-      ...($('aiWithBuild').checked && latestFailedBuild ? { buildId: latestFailedBuild } : {}),
-    }, (ev, data) => {
-      if (ev === 'delta') {
-        acc += data.text;
-        if (Date.now() - lastRender > 80) {
-          lastRender = Date.now();
-          renderBody(acc, bodyEl);
-          box.scrollTop = box.scrollHeight;
-        }
-      } else if (ev === 'reasoning') {
-        think.d.hidden = false;
-        reasoning.textContent += data.text;
-        reasoning.scrollTop = reasoning.scrollHeight;
-      } else if (ev === 'tool') {
-        toolRow(toolsBox, data);
-        activitySummary(act, { running: true, status: statusText });
+  currentJob = job ? { id: job.id } : null;
+  const notice = el('div', { class: 'muted small', hidden: true });
+  reply.append(notice);
+  const handle = (ev, data, id) => {
+    if (id) last = Math.max(last, Number(id) || 0);
+    if (ev === 'job') { currentJob = { id: data.id }; return; }
+    if (ev === 'end') { return; }
+    notice.hidden = true;
+    if (ev === 'engine') isHermes = data.kind === 'hermes';
+    else if (ev === 'delta') {
+      acc += data.text;
+      if (Date.now() - lastRender > 80) {
+        lastRender = Date.now();
+        renderBody(acc, bodyEl);
         box.scrollTop = box.scrollHeight;
-        if (data.status === 'completed') { emit('files-changed'); emit('fs-changed'); }
-      } else if (ev === 'approval') {
-        reply.insertBefore(approvalCard(data, prov), bodyEl); // outside the fold: never hidden
-        box.scrollTop = box.scrollHeight;
-        notify('Hermes needs your approval', data.description || data.tool || '');
-      } else if (ev === 'status' && data.error) {
-        reply.append(el('div', { class: 'err', text: `⚠ ${data.error}` }));
-      } else if (ev === 'status') {
-        statusText = String(data.message || data.status || data.text || '').slice(0, 80);
-        activitySummary(act, { running: true, status: statusText });
-      } else if (ev === 'done') {
-        renderBody(data.message, bodyEl);
-        if (data.usage) renderMeter({ ...data.usage, contextWindow: data.contextWindow || undefined });
-        if (data.proposal?.files?.length || data.proposal?.errors?.length) reply.append(proposalEl(data.proposal));
-        if (data.engine === 'hermes') { emit('files-changed'); emit('fs-changed'); }
-      } else if (ev === 'error') {
-        throw new Error(data.message);
       }
-    }, sending.signal);
+    } else if (ev === 'reasoning') {
+      think.d.hidden = false;
+      reasoning.textContent += data.text;
+      reasoning.scrollTop = reasoning.scrollHeight;
+    } else if (ev === 'tool') {
+      toolRow(toolsBox, data);
+      activitySummary(act, { running: true, status: statusText });
+      box.scrollTop = box.scrollHeight;
+      if (data.status === 'completed') { emit('files-changed'); emit('fs-changed'); }
+    } else if (ev === 'approval') {
+      reply.insertBefore(approvalCard(data, prov || engine()), bodyEl); // outside the fold: never hidden
+      box.scrollTop = box.scrollHeight;
+      notify('Hermes needs your approval', data.description || data.tool || '');
+    } else if (ev === 'status' && data.error) {
+      reply.append(el('div', { class: 'err', text: `⚠ ${data.error}` }));
+    } else if (ev === 'status') {
+      statusText = String(data.message || data.status || data.text || '').slice(0, 80);
+      activitySummary(act, { running: true, status: statusText });
+    } else if (ev === 'done') {
+      finished = true;
+      renderBody(data.message, bodyEl);
+      if (data.usage) renderMeter({ ...data.usage, contextWindow: data.contextWindow || undefined });
+      if (data.proposal?.files?.length || data.proposal?.errors?.length) reply.append(proposalEl(data.proposal));
+      if (data.engine === 'hermes') { emit('files-changed'); emit('fs-changed'); }
+    } else if (ev === 'error') {
+      finished = true;
+      failure = data.stopped ? null : data.message;
+      if (data.stopped) notice.textContent = '⏹ Stopped';
+      notice.hidden = !data.stopped;
+    }
+  };
+  try {
+    if (body) {
+      try {
+        await postStream(`/api/projects/${encodeURIComponent(app.project.id)}/ai/chat`, body, handle, sending.signal);
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        if (e.status === 409 && e.data?.job) throw new Error(e.message);
+        if (!currentJob) throw e; // never started
+      }
+    }
+    // Connection dropped before the end (or attaching after a reload): follow the job until it ends.
+    for (let tries = 0; !finished && currentJob && !sending.signal.aborted; tries++) {
+      notice.textContent = tries ? '⟳ Reconnecting…' : '⟳ Connection dropped: reconnecting (the AI keeps working)…';
+      notice.hidden = false;
+      try {
+        await followJob(currentJob.id, last, handle, sending.signal);
+        if (!finished && !sending.signal.aborted) {
+          // ended without done/error: the turn finished while we were away; the history has it
+          finished = true;
+          notice.textContent = 'This turn finished while the page was disconnected. Its answer is in the history.';
+        }
+      } catch (e) {
+        if (tries >= 2) throw e;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+    if (failure) throw new Error(failure);
   } catch (e) {
     if (e.name !== 'AbortError') {
       renderBody(acc, bodyEl);
@@ -367,6 +442,7 @@ async function send() {
     }
   } finally {
     app.aiRunning = false;
+    currentJob = null;
     reply.classList.remove('thinking');
     activitySummary(act, { running: false, secs: Math.round((Date.now() - t0) / 1000) });
     act.d.open = false;
@@ -376,9 +452,27 @@ async function send() {
     $('aiSend').textContent = 'Send';
     $('aiWithBuild').checked = false;
     box.scrollTop = box.scrollHeight;
+    if (isHermes) { emit('files-changed'); emit('fs-changed'); }
   }
 }
-$('aiSend').addEventListener('click', () => (sending ? sending.abort() : send()));
+
+/** Stop: tell the server to stop the turn (and Hermes), then stop listening. */
+async function stopTurn() {
+  const j = currentJob;
+  if (j) await pApi(`/ai/jobs/${encodeURIComponent(j.id)}/cancel`, { method: 'POST', body: {} }).catch(() => {});
+  sending?.abort();
+}
+
+/** Reopening a project while its turn still runs: show it and keep following. */
+async function resumeActive() {
+  let r;
+  try { r = await pApi('/ai/active'); } catch { return; }
+  if (!r.job || sending) return;
+  const prov = providers.find((p) => p.name === r.job.engine) || engine();
+  await runTurn({ text: r.job.message, ctx: [], prov, job: r.job });
+}
+
+$('aiSend').addEventListener('click', () => (sending ? stopTurn() : send()));
 $('aiFollow').checked = pref('aiFollow', true);
 $('aiFollow').addEventListener('change', () => setPref('aiFollow', $('aiFollow').checked));
 $('aiInput').addEventListener('keydown', (e) => {

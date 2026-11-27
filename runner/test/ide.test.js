@@ -610,7 +610,11 @@ test('Hermes engine: streams text, tool progress and approvals; keeps one sessio
     const P = '/api/projects/hello-views';
     await api(`${P}/ai/clear`, { method: 'POST' });
     const t1 = await (await api(`${P}/ai/chat`, { method: 'POST', body: { message: 'Ganti judul', providerId: 'hermes-agent', activeFile: 'app/src/main/res/values/strings.xml' }, raw: true })).text();
-    const evs = t1.split('\n\n').filter(Boolean).map((c) => ({ ev: /^event: (.*)$/m.exec(c)?.[1], data: JSON.parse(/^data: (.*)$/m.exec(c)[1]) }));
+    const all = t1.split('\n\n').filter((c) => /^data: /m.test(c)).map((c) => ({ ev: /^event: (.*)$/m.exec(c)?.[1], data: JSON.parse(/^data: (.*)$/m.exec(c)[1]) }));
+    assert.equal(all[0].ev, 'job');
+    assert.equal(all.at(-1).ev, 'end');
+    assert.ok(all.some((e) => e.ev === 'run' && e.data.runId === 'chatcmpl-1'), 'Hermes run id is reported');
+    const evs = all.filter((e) => !['job', 'run', 'end'].includes(e.ev));
     assert.deepEqual(evs.map((e) => e.ev), ['engine', 'tool', 'approval', 'reasoning', 'delta', 'tool', 'delta', 'done']);
     assert.equal(evs.find((e) => e.ev === 'approval').data.request_id, 'p-9');
     const done = evs.at(-1).data;
@@ -699,4 +703,80 @@ test('live events: file changes from the IDE and MCP, and build states, reach th
   await waitFor((e) => e.ev === 'build' && e.data.id === b.id && e.data.state === 'queued', 'build queued');
   await waitFor((e) => e.ev === 'build' && e.data.id === b.id && e.data.state === 'succeeded', 'build succeeded');
   ac.abort();
+});
+
+test('AI turns survive a dropped connection: re-attach replays, busy is refused, Stop cancels Hermes', async () => {
+  const seen = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const srv = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', async () => {
+      seen.push({ url: req.url, body: b });
+      if (req.url.startsWith('/v1/runs/')) { res.setHeader('content-type', 'application/json'); return res.end('{"status":"stopping"}'); }
+      const msg = JSON.parse(b).messages[0].content;
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Hermes-Session-Id': 'sess-drop' });
+      const f = (data, event) => res.write(`${event ? `event: ${event}\n` : ''}data: ${JSON.stringify(data)}\n\n`);
+      f({ id: 'chatcmpl-slow', choices: [{ delta: { content: 'Part one. ' } }] });
+      if (/stop me/.test(msg)) { req.socket.on('close', () => seen.push({ url: 'closed' })); return; } // never finishes by itself
+      await gate;
+      f({ id: 'chatcmpl-slow', choices: [{ delta: { content: 'Part two.' } }] });
+      res.end('data: [DONE]\n\n');
+    });
+  }).listen(0, '127.0.0.1');
+  await new Promise((r) => srv.once('listening', r));
+  const P = '/api/projects/hello-views';
+  const readUntil = async (r, pred) => {
+    const dec = new TextDecoder();
+    let text = '';
+    for await (const c of r.body) { text += dec.decode(c, { stream: true }); if (pred(text)) break; }
+    return text;
+  };
+  try {
+    await api('/api/ai/providers', { method: 'POST', body: { name: 'Slow Hermes', kind: 'hermes', baseUrl: `http://127.0.0.1:${srv.address().port}/v1`, apiKey: 'k' } });
+    await api(`${P}/ai/clear`, { method: 'POST' });
+    // 1. start, read the first delta, then drop the connection
+    const ac = new AbortController();
+    const r1 = await fetch(`${ctx.base}${P}/ai/chat`, { method: 'POST', headers: { Cookie: ctx.cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'Long task', providerId: 'slow-hermes' }), signal: ac.signal });
+    const t1 = await readUntil(r1, (t) => t.includes('Part one'));
+    const jobId = JSON.parse(/event: job\ndata: (.*)/.exec(t1)[1]).id;
+    ac.abort();
+    await sleep(200);
+    // 2. still running; a second message is refused instead of queueing silently inside Hermes
+    const act = (await api(`${P}/ai/active`)).data.job;
+    assert.equal(act.id, jobId);
+    assert.equal(act.message, 'Long task');
+    const busy = await api(`${P}/ai/chat`, { method: 'POST', body: { message: 'Another', providerId: 'slow-hermes' } });
+    assert.equal(busy.status, 409);
+    assert.equal(busy.data.job.id, jobId);
+    // 3. re-attach: missed events are replayed, then the rest streams live
+    const r2 = await fetch(`${ctx.base}${P}/ai/jobs/${jobId}/events?after=0`, { headers: { Cookie: ctx.cookie } });
+    release();
+    const t2 = await readUntil(r2, (t) => t.includes('event: end'));
+    assert.match(t2, /Part one/);
+    assert.match(t2, /Part two/);
+    const done = JSON.parse(/event: done\ndata: (.*)/.exec(t2)[1]);
+    assert.equal(done.message, 'Part one. Part two.');
+    const ids = [...t2.matchAll(/^id: (\d+)$/gm)].map((m) => Number(m[1]));
+    assert.ok(ids.length > 2 && ids.every((x, i) => !i || x > ids[i - 1]), 'events carry increasing ids');
+    const after = ids.at(-2);
+    const r3 = await (await fetch(`${ctx.base}${P}/ai/jobs/${jobId}/events?after=${after}`, { headers: { Cookie: ctx.cookie } })).text();
+    assert.doesNotMatch(r3, /event: delta/, 'after= skips what the client already has');
+    assert.match(r3, /event: done/);
+    assert.equal((await api(`${P}/ai/history`)).data.messages.at(-1).content, 'Part one. Part two.');
+    assert.equal((await api(`${P}/ai/active`)).data.job, null);
+    // 4. Stop: the job ends as stopped and Hermes is asked to stop the run
+    const r4 = await fetch(`${ctx.base}${P}/ai/chat`, { method: 'POST', headers: { Cookie: ctx.cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'please stop me', providerId: 'slow-hermes' }) });
+    const t4 = await readUntil(r4, (t) => t.includes('Part one'));
+    const job4 = JSON.parse(/event: job\ndata: (.*)/.exec(t4)[1]).id;
+    await sleep(100);
+    const c = await api(`${P}/ai/jobs/${job4}/cancel`, { method: 'POST', body: {} });
+    assert.equal(c.data.stopped, true);
+    const rest = await (await fetch(`${ctx.base}${P}/ai/jobs/${job4}/events?after=0`, { headers: { Cookie: ctx.cookie } })).text();
+    assert.match(rest, /"stopped":true/);
+    await sleep(200);
+    assert.ok(seen.some((x) => x.url === '/v1/runs/chatcmpl-slow/stop'), 'Hermes stop endpoint called');
+    assert.equal((await api(`${P}/ai/jobs/nope/events`)).status, 404);
+  } finally { release(); srv.close(); }
 });

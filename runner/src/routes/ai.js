@@ -3,6 +3,8 @@ import * as ai from '../ai.js';
 import * as aicode from '../aicode.js';
 import * as providers from '../providers.js';
 import * as hermes from '../hermes.js';
+import * as chatjobs from '../chatjobs.js';
+import { openSse } from '../sse.js';
 import { HttpError, bad, isBuildId } from '../validate.js';
 import { str, serialOf, pkgOf } from './util.js';
 
@@ -65,24 +67,53 @@ export function register(router, { builds, projects }) {
     if (typeof opts.message !== 'string' || !opts.message.trim()) throw bad('message is required');
     const prov = providers.resolve(typeof body.providerId === 'string' ? body.providerId : undefined);
     if (typeof body.model === 'string' && body.model.trim()) prov.model = body.model.trim().slice(0, 200);
-    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no' });
-    const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    const ac = new AbortController();
-    res.on('close', () => { if (!res.writableEnded) ac.abort(); });
-    const hb = setInterval(() => res.write(': hb\n\n'), 15_000);
-    try {
-      send('engine', { id: prov.id, name: prov.name, kind: prov.kind, model: prov.model || null });
-      const out = prov.kind === 'hermes'
-        ? await hermes.chat(p, opts, prov, (type, data) => send(type, data), ac.signal)
-        : await aicode.chat(p, opts, (d) => send('delta', { text: d }), ac.signal, prov);
-      send('done', { ...out, engine: prov.kind, contextWindow: prov.contextWindow || null });
-    } catch (e) {
-      if (!ac.signal.aborted) send('error', { message: e.message });
-    } finally {
-      clearInterval(hb);
-      res.end();
+    const busy = chatjobs.active(p.id);
+    if (busy) {
+      const e = new HttpError(409, 'The AI is still answering the previous message. Wait for it or press Stop.');
+      e.body = { busy: true, job: chatjobs.view(busy) };
+      throw e;
     }
+    // The turn runs as a job: closing this response (phone locked, proxy timeout) does not stop it.
+    const job = chatjobs.start(p.id, { message: opts.message, engine: prov.name }, async (emit, signal) => {
+      emit('engine', { id: prov.id, name: prov.name, kind: prov.kind, model: prov.model || null });
+      const out = prov.kind === 'hermes'
+        ? await hermes.chat(p, opts, prov, (type, data) => emit(type, data), signal)
+        : await aicode.chat(p, opts, (d) => emit('delta', { text: d }), signal, prov);
+      return { ...out, engine: prov.kind, contextWindow: prov.contextWindow || null };
+    });
+    job.provider = prov;
+    job.opts = opts;
+    streamJob(req, res, job, 0);
   });
+  router.get('/api/projects/:id/ai/active', (req, res, { params }) => {
+    projects.get(params.id);
+    sendJson(res, 200, { job: chatjobs.view(chatjobs.active(params.id)) });
+  });
+  router.get('/api/projects/:id/ai/jobs/:job/events', (req, res, { params, url }) => {
+    projects.get(params.id);
+    const job = chatjobs.get(params.job);
+    if (!job || job.projectId !== params.id) throw new HttpError(404, 'This AI turn is gone (finished more than 15 minutes ago or the runner restarted)');
+    const after = Number(req.headers['last-event-id'] || url.searchParams.get('after') || 0) || 0;
+    streamJob(req, res, job, after);
+  });
+  router.post('/api/projects/:id/ai/jobs/:job/cancel', async (req, res, { params }) => {
+    projects.get(params.id);
+    const job = chatjobs.get(params.job);
+    if (!job || job.projectId !== params.id) throw new HttpError(404, 'Unknown AI turn');
+    const runId = job.opts?.runId;
+    const stopped = chatjobs.cancel(job, () => { if (job.provider?.kind === 'hermes' && runId) hermes.stop(job.provider, runId); });
+    sendJson(res, 200, { ok: true, stopped });
+  });
+  /** SSE: job events with ids (EventSource resumes with Last-Event-ID); `end` closes the stream. */
+  function streamJob(req, res, job, after) {
+    const sse = openSse(req, res);
+    sse.send('job', chatjobs.view(job));
+    const unsub = chatjobs.subscribe(job, after, (e) => {
+      if (e) sse.send(e.event, e.data, e.n);
+      else { sse.send('end', { id: job.id }); sse.end(); }
+    });
+    sse.onClose(unsub);
+  }
   router.post('/api/projects/:id/ai/hermes-approval', async (req, res, { params, body }) => {
     projects.get(params.id);
     const prov = providers.resolve(body.providerId);

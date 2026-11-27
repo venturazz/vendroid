@@ -63,11 +63,13 @@ export async function postStream(path, body, onEvent, signal) {
       buf = buf.slice(i + 2);
       let ev = 'message';
       let data = '';
+      let id;
       for (const l of chunk.split('\n')) {
         if (l.startsWith('event: ')) ev = l.slice(7);
         else if (l.startsWith('data: ')) data += l.slice(6);
+        else if (l.startsWith('id: ')) id = l.slice(4);
       }
-      if (data) onEvent(ev, JSON.parse(data));
+      if (data) onEvent(ev, JSON.parse(data), id);
     }
   }
 }

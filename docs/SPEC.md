@@ -80,7 +80,7 @@ Version 2.1, branch `feat/android-remote-runner`. Each item has an ID, so you ca
 
 | ID | Item | Behaviour |
 |---|---|---|
-| A-1 | Chat | Per-project conversation (last 40 messages kept), streamed answers, Stop button |
+| A-1 | Chat | Per-project conversation (last 40 messages kept), streamed answers, Stop button (also stops the Hermes run). A turn runs as a server-side job: a dropped connection or a reload re-attaches and replays missed events (`GET …/ai/jobs/:job/events?after=`); one turn per project at a time (409 while busy) |
 | A-2 | Context | Project summary + file tree + open file + selection + added files + build script/manifest + optional last build error (budget `AI_CODE_CONTEXT_CHARS`, default 120k) |
 | A-3 | Edits | SEARCH/REPLACE blocks → diffs; tolerant of indentation; failed blocks listed, never half-applied per block |
 | A-4 | Apply | Per file, all, or **Apply & Run**; refuses if the file changed since the proposal |

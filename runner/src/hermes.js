@@ -89,6 +89,8 @@ export async function chat(p, opts, prov, onEvent, signal) {
     if (data === '[DONE]') return;
     let j;
     try { j = JSON.parse(data); } catch { return; }
+    const rid = j.run_id || (typeof j.id === 'string' && j.id.startsWith('chatcmpl') ? j.id : null);
+    if (rid && rid !== opts.runId) { opts.runId = rid; onEvent('run', { runId: rid }); }
     if (event === 'hermes.tool.progress') {
       if (j.status === 'running') tools.push({ tool: j.tool, label: j.label });
       onEvent('tool', j);
@@ -101,7 +103,10 @@ export async function chat(p, opts, prov, onEvent, signal) {
       const d = j.choices?.[0]?.delta || {};
       if (d.reasoning_content) onEvent('reasoning', { text: d.reasoning_content });
       if (d.content) { text += d.content; onEvent('delta', { text: d.content }); }
-      if (j.error) onEvent('status', { error: j.error.message || String(j.error) });
+      if (j.error) {
+        const msg = j.error.message || String(j.error);
+        onEvent('status', { error: msg === 'admission_conflict' ? 'Hermes refused the turn (admission_conflict): start a new conversation' : msg });
+      }
     }
   };
   if (!(res.headers['content-type'] || '').includes('event-stream')) {
@@ -138,6 +143,15 @@ export async function chat(p, opts, prov, onEvent, signal) {
   const u = usage ? { sessionInputTokens: usage.prompt_tokens || 0, sessionOutputTokens: usage.completion_tokens || 0 } : null;
   if (u && (sid || sess.sessionId)) writeSession(p.id, { ...readSession(p.id), usage: u });
   return { message: text, sessionId: sid || sess.sessionId || null, tools, usage: u };
+}
+
+/** Ask Hermes to stop a running turn (best effort; it stops at the next safe point). */
+export async function stop(prov, runId) {
+  if (typeof runId !== 'string' || !/^[A-Za-z0-9._:-]{1,200}$/.test(runId)) return false;
+  try {
+    const r = await fetch(`${prov.baseUrl}/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders(prov) }, body: '{}', signal: AbortSignal.timeout(10_000) });
+    return r.ok;
+  } catch { return false; }
 }
 
 /** Forward an approval decision (from the IDE's Approve/Deny buttons) to Hermes. */
