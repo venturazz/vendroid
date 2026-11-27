@@ -319,8 +319,7 @@ async function send() {
   if (!prov) { toast('Add an AI provider in Settings first', 'err'); return; }
   await saveAll();
   const ctx = [...new Set([currentFile, ...extraContext].filter(Boolean))];
-  $('aiInput').value = '';
-  setPref(`aiDraft:${app.project.id}`, '');
+  clearComposer(text);
   await runTurn({
     text, ctx, prov,
     body: {
@@ -486,10 +485,36 @@ async function resumeActive() {
 $('aiSend').addEventListener('click', () => (sending ? stopTurn() : send()));
 $('aiFollow').checked = pref('aiFollow', true);
 $('aiFollow').addEventListener('change', () => setPref('aiFollow', $('aiFollow').checked));
+// Phone keyboards (Gboard, Samsung, iOS) keep the last word "composing". Clearing the box while a
+// word is still composing makes the keyboard commit it again right after, which left a stray
+// letter or word ("I", "S" …) in the empty box. Blur first so the keyboard commits, then clear, and
+// drop a re-inserted tail of the message that arrives within the next moment.
+let lastSent = null;
+function clearComposer(text) {
+  const ta = $('aiInput');
+  const hadFocus = document.activeElement === ta;
+  if (hadFocus) ta.blur();
+  ta.value = '';
+  lastSent = { text, at: Date.now() };
+  setPref(`aiDraft:${app.project.id}`, '');
+  if (hadFocus) setTimeout(() => ta.focus(), 0);
+}
+function dropCommitEcho() {
+  const ta = $('aiInput');
+  if (!lastSent || Date.now() - lastSent.at > 1500) { lastSent = null; return false; }
+  const v = ta.value.trim();
+  if (v && v.length <= 40 && lastSent.text.endsWith(v)) { ta.value = ''; return true; }
+  if (v) lastSent = null; // the user is typing something new
+  return false;
+}
 $('aiInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); }
 });
-$('aiInput').addEventListener('input', () => setPref(`aiDraft:${app.project.id}`, $('aiInput').value));
+$('aiInput').addEventListener('compositionend', () => setTimeout(dropCommitEcho, 0));
+$('aiInput').addEventListener('input', () => {
+  dropCommitEcho();
+  setPref(`aiDraft:${app.project.id}`, $('aiInput').value);
+});
 $('aiClear').addEventListener('click', guard(async () => {
   if (!confirm('Start a new conversation? The current history for this project is cleared.')) return;
   await pApi('/ai/clear', { method: 'POST' });
@@ -508,7 +533,7 @@ $('aiHermes').addEventListener('click', busy($('aiHermes'), async () => {
   $('aiMessages').append(messageEl('user', text), el('div', { class: 'msg assistant' },
     el('div', { class: 'who', text: 'HERMES' }),
     el('div', { class: 'body', text: `Task sent (HTTP ${r.status}). Hermes works through the MCP tools; its edits, commits and builds appear here, in Source Control and in Build Output.` })));
-  $('aiInput').value = '';
+  clearComposer(text);
 }));
 
 /** Pre-fill the assistant with an error to fix (from Build Output / Logcat). */
