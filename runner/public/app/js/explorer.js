@@ -1,5 +1,5 @@
 // File Explorer (lazy tree with git decorations and a context menu) + project search.
-import { $, app, pApi, el, toast, guard, prompt, dirname, basename, emit, on, pref, setPref } from './core.js';
+import { $, app, pApi, el, toast, guard, prompt, dirname, basename, emit, on, pref, setPref, debounce } from './core.js';
 import { openFile, closeTabsUnder, renameTab } from './editor.js';
 
 const expanded = new Set(); // dir paths
@@ -221,7 +221,8 @@ on('git-status', (st) => {
     if (m) n.classList.add(`git-${m === 'renamed' || m === 'conflict' ? 'modified' : m}`);
   }
 });
-on('fs-changed', () => refreshTree());
+const refreshTreeSoon = debounce(() => refreshTree(), 400);
+on('fs-changed', () => refreshTreeSoon());
 // Follow the active editor tab in the tree (like "Autoreveal" in IDEs).
 on('active-file', (p) => {
   if (!p || selected === p) return;

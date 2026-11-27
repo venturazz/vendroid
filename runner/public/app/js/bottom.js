@@ -1,5 +1,5 @@
 // Bottom panel scoped to the active project: Build Output, Logcat, Device screenshot/actions.
-import { $, app, api, pApi, el, toast, guard, busy, fmtDur, notify, emit, on, pref, setPref } from './core.js';
+import { $, app, api, pApi, el, toast, guard, busy, fmtDur, notify, emit, on, pref, setPref, perFrame } from './core.js';
 import { openFile } from './editor.js';
 import { askToFix, setLatestFailedBuild } from './ai.js';
 import { parseProblems } from './problems.js';
@@ -7,16 +7,33 @@ import { parseProblems } from './problems.js';
 const TERMINAL = ['succeeded', 'failed', 'cancelled'];
 const MAX_LINES = 6000;
 
+// Lines are buffered and written once per frame: replaying a 5000-line build log used to add (and
+// scroll after) every line separately, which forced a layout per line and froze the page.
 class LogView {
-  constructor(pre, autoId) { this.pre = pre; this.n = 0; this.autoId = autoId; }
+  constructor(pre, autoId) {
+    this.pre = pre; this.n = 0; this.autoId = autoId; this.pending = [];
+    this.flushSoon = perFrame(() => this.flush());
+  }
   add(text, cls = '', onclick) {
-    const d = el('div', { class: cls, text: text || ' ' });
-    if (onclick) { d.classList.add('link'); d.addEventListener('click', onclick); }
-    this.pre.append(d);
-    if (++this.n > MAX_LINES) { this.pre.firstChild.remove(); this.n--; }
+    this.pending.push([text, cls, onclick]);
+    if (this.pending.length > MAX_LINES) this.pending.splice(0, this.pending.length - MAX_LINES);
+    this.flushSoon();
+  }
+  flush() {
+    if (!this.pending.length) return;
+    const frag = document.createDocumentFragment();
+    for (const [text, cls, onclick] of this.pending) {
+      const d = el('div', { class: cls, text: text || ' ' });
+      if (onclick) { d.classList.add('link'); d.addEventListener('click', onclick); }
+      frag.append(d);
+    }
+    this.n += this.pending.length;
+    this.pending = [];
+    this.pre.append(frag);
+    while (this.n > MAX_LINES) { this.pre.firstChild.remove(); this.n--; }
     if ($(this.autoId).checked) this.pre.scrollTop = this.pre.scrollHeight;
   }
-  clear() { this.pre.textContent = ''; this.n = 0; }
+  clear() { this.pre.textContent = ''; this.n = 0; this.pending = []; }
 }
 
 // ---------------------------------------------------------------- panel chrome
@@ -189,12 +206,15 @@ export async function refreshBuilds() {
   for (const b of r.builds) observe(b);
   const sel = $('buildSel');
   const cur = sel.value;
-  sel.textContent = '';
-  for (const b of r.builds) {
-    const when = new Date(b.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    sel.append(new Option(`${when} · ${b.task} · ${b.state}${b.trigger !== 'manual' ? ` · ${b.trigger}` : ''}`, b.id));
+  const label = (b) => `${new Date(b.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${b.task} · ${b.state}${b.trigger !== 'manual' ? ` · ${b.trigger}` : ''}`;
+  const sig = r.builds.map((b) => `${b.id}:${b.state}`).join(',');
+  // Rebuilding the options while the dropdown is open closes it under the user's finger.
+  if (sig !== sel.dataset.sig && document.activeElement !== sel) {
+    sel.dataset.sig = sig;
+    sel.textContent = '';
+    for (const b of r.builds) sel.append(new Option(label(b), b.id));
+    if (!r.builds.length) sel.append(new Option('No builds yet', ''));
   }
-  if (!r.builds.length) sel.append(new Option('No builds yet', ''));
   const keep = r.builds.find((b) => b.id === (selected || cur));
   if (keep) sel.value = keep.id;
   const newest = r.builds[0];
@@ -203,7 +223,8 @@ export async function refreshBuilds() {
   else if (!r.builds.length && selected) attachBuild(null);
   emit('queue', r);
 }
-$('buildSel').addEventListener('change', () => { if ($('buildSel').value) attachBuild($('buildSel').value); });
+$('buildSel').addEventListener('change', () => { if ($('buildSel').value) { attachBuild($('buildSel').value); $('buildSel').blur(); } });
+$('buildSel').addEventListener('blur', () => setTimeout(() => refreshBuilds()));
 
 /** A new build (from Run, Hermes, a push webhook …) takes over the panel once the shown one is done. */
 function follow(b) {

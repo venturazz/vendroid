@@ -252,6 +252,25 @@ try {
   await page.waitForSelector('#bState.succeeded', { timeout: 30000 });
   await page.waitForSelector('#bLog div:has-text("BUILD SUCCESSFUL")', { timeout: 10000 }).catch(() => problems.push('new build log not streamed'));
 
+  step('build dropdown: switching to a long log stays responsive');
+  fs.writeFileSync(path.join(projDir(), 'NOISY'), '');
+  const noisy = await page.evaluate(async () => (await (await fetch('/api/projects/ui-test-app/builds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'assembleDebug' }) })).json()).id);
+  await page.waitForFunction((id) => document.querySelector('#buildSel').value === id, noisy, { timeout: 10000 });
+  await page.waitForSelector('#bState.succeeded', { timeout: 30000 });
+  fs.rmSync(path.join(projDir(), 'NOISY'));
+  const older = await page.$eval('#buildSel', (s) => s.options[1]?.value);
+  for (const id of [older, noisy, older, noisy]) {
+    const t0 = Date.now();
+    await page.selectOption('#buildSel', id);
+    if (id === noisy) await page.waitForSelector('#bLog div:has-text("step4499 ")', { timeout: 10000 });
+    else await page.waitForSelector('#bLog div:has-text("BUILD SUCCESSFUL")', { timeout: 10000 });
+    const ms = Date.now() - t0;
+    console.log(`[ui] switched build in ${ms} ms`);
+    if (ms > 4000) problems.push(`switching builds took ${ms} ms`);
+  }
+  const lag = await page.evaluate(() => new Promise((r) => { const t = performance.now(); setTimeout(() => r(performance.now() - t), 0); }));
+  if (lag > 500) problems.push(`page busy for ${Math.round(lag)} ms after switching`);
+
   step('device screenshot');
   await page.click('.bottom-tabs [data-btab=device]');
   await page.click('#scCapture');

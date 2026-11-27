@@ -75,6 +75,22 @@ export async function postStream(path, body, onEvent, signal) {
 }
 
 // ---- UI helpers
+/** Run fn at most once per `ms` after the last call (trailing). */
+export function debounce(fn, ms) {
+  let t = null;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+/** Coalesce many calls into one per animation frame (falls back to a timer when the tab is hidden). */
+export function perFrame(fn) {
+  let queued = false;
+  return () => {
+    if (queued) return;
+    queued = true;
+    const run = () => { if (!queued) return; queued = false; fn(); };
+    requestAnimationFrame(run);
+    setTimeout(run, 250); // rAF does not fire in background tabs
+  };
+}
 let toastTimer;
 export function toast(msg, kind = '') {
   const t = $('toast');

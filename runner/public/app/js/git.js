@@ -1,5 +1,5 @@
 // Source Control panel: status, diff, commit, pull, push, branches.
-import { $, app, pApi, el, toast, guard, busy, prompt, emit, on, actionButton } from './core.js';
+import { $, app, pApi, el, toast, guard, busy, prompt, emit, on, actionButton, debounce } from './core.js';
 import { openDiff, openFile, saveAll } from './editor.js';
 
 const LETTER = { modified: 'M', added: 'A', deleted: 'D', renamed: 'R', untracked: 'U', conflict: 'C', typechange: 'T', copied: 'C' };
@@ -130,6 +130,7 @@ async function switchBranch() {
 }
 
 $('gitRefresh').addEventListener('click', guard(refreshGit));
-on('saved', () => refreshGit());
-on('fs-changed', () => refreshGit());
-on('files-changed', () => refreshGit());
+const refreshGitSoon = debounce(() => refreshGit(), 600);
+on('saved', () => refreshGitSoon());
+on('fs-changed', () => refreshGitSoon());
+on('files-changed', () => refreshGitSoon());

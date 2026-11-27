@@ -1,6 +1,6 @@
 // AI coding panel: chat with 9Router about the active project, review proposed edits as diffs,
 // apply with one click (with undo), or hand the task to Hermes Agent.
-import { $, app, api, pApi, el, toast, guard, busy, postStream, renderDiff, emit, on, pref, setPref, actionButton, notify } from './core.js';
+import { $, app, api, pApi, el, toast, guard, busy, postStream, renderDiff, emit, on, pref, setPref, actionButton, notify, perFrame } from './core.js';
 import { selectionText, openTabs, openFile, saveAll, reloadFromDisk } from './editor.js';
 
 const extraContext = new Set();
@@ -355,8 +355,21 @@ async function runTurn({ text, ctx, prov, body, job }) {
   sending = new AbortController();
   $('aiSend').textContent = 'Stop';
   let acc = '';
-  let lastRender = 0;
+  let thought = '';
   let last = 0;
+  // Render at most once per frame: a long answer or reasoning used to be re-laid out per token.
+  const paint = perFrame(() => {
+    renderBody(acc, bodyEl);
+    if (thought) {
+      reasoning.textContent = thought.length > 20_000 ? `…${thought.slice(-20_000)}` : thought;
+      reasoning.scrollTop = reasoning.scrollHeight;
+    }
+    activitySummary(act, { running: true, status: statusText });
+    const nearEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
+    if (nearEnd || stick) box.scrollTop = box.scrollHeight;
+    stick = false;
+  });
+  let stick = true;
   let finished = false;
   let failure = null;
   let isHermes = prov?.kind === 'hermes';
@@ -372,32 +385,30 @@ async function runTurn({ text, ctx, prov, body, job }) {
     if (ev === 'engine') isHermes = data.kind === 'hermes';
     else if (ev === 'delta') {
       acc += data.text;
-      if (Date.now() - lastRender > 80) {
-        lastRender = Date.now();
-        renderBody(acc, bodyEl);
-        box.scrollTop = box.scrollHeight;
-      }
+      paint();
     } else if (ev === 'reasoning') {
       think.d.hidden = false;
-      reasoning.textContent += data.text;
-      reasoning.scrollTop = reasoning.scrollHeight;
+      thought += data.text;
+      paint();
     } else if (ev === 'tool') {
+      // File changes reach the editor and tree through the live event stream (live.js), with exact
+      // paths; reloading every tab here on each tool call flooded the runner with requests.
       toolRow(toolsBox, data);
-      activitySummary(act, { running: true, status: statusText });
-      box.scrollTop = box.scrollHeight;
-      if (data.status === 'completed') { emit('files-changed'); emit('fs-changed'); }
+      paint();
     } else if (ev === 'approval') {
       reply.insertBefore(approvalCard(data, prov || engine()), bodyEl); // outside the fold: never hidden
-      box.scrollTop = box.scrollHeight;
+      stick = true;
+      paint();
       notify('Hermes needs your approval', data.description || data.tool || '');
     } else if (ev === 'status' && data.error) {
       reply.append(el('div', { class: 'err', text: `⚠ ${data.error}` }));
     } else if (ev === 'status') {
       statusText = String(data.message || data.status || data.text || '').slice(0, 80);
-      activitySummary(act, { running: true, status: statusText });
+      paint();
     } else if (ev === 'done') {
       finished = true;
-      renderBody(data.message, bodyEl);
+      acc = data.message || acc;
+      renderBody(acc, bodyEl);
       if (data.usage) renderMeter({ ...data.usage, contextWindow: data.contextWindow || undefined });
       if (data.proposal?.files?.length || data.proposal?.errors?.length) reply.append(proposalEl(data.proposal));
       if (data.engine === 'hermes') { emit('files-changed'); emit('fs-changed'); }

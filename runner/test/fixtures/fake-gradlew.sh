@@ -12,6 +12,7 @@ if [ -f "$D/FAIL" ]; then
   exit 1
 fi
 [ -f "$D/SLOW" ] && sleep 30
+if [ -f "$D/NOISY" ]; then i=0; while [ $i -lt 4500 ]; do echo "> Task :app:step$i UP-TO-DATE"; i=$((i+1)); done; fi
 variant=debug
 case "$*" in *assembleRelease*|*bundleRelease*) variant=release ;; esac
 case "$*" in *bundleRelease*)
