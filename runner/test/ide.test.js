@@ -780,3 +780,16 @@ test('AI turns survive a dropped connection: re-attach replays, busy is refused,
     assert.equal((await api(`${P}/ai/jobs/nope/events`)).status, 404);
   } finally { release(); srv.close(); }
 });
+
+test('diagnostics: boot id on /healthz, /api/diag reports uptime, memory and the previous exit', async () => {
+  const h = await (await fetch(`${ctx.base}/healthz`)).json();
+  assert.match(h.boot, /^[0-9a-f]{12}$/);
+  const d = (await api('/api/diag')).data;
+  assert.equal(d.bootId, h.boot);
+  assert.ok(d.uptimeSec >= 0 && d.memory.rssMB > 0 && d.memory.hostTotalMB > 0 && d.cpus > 0);
+  assert.ok('active' in d.builds);
+  assert.equal((await fetch(`${ctx.base}/api/diag`)).status, 401, 'needs login');
+  const rec = JSON.parse(fs.readFileSync(path.join(ctx.env.DATA_DIR, 'last-exit.json'), 'utf8'));
+  assert.equal(rec.reason, 'running');
+  assert.equal(rec.bootId, h.boot);
+});

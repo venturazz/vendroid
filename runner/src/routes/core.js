@@ -7,9 +7,11 @@ import { HttpError, LEVELS } from '../validate.js';
 import { TEMPLATE_IDS } from '../projects.js';
 import { PLAY_TARGET_SDK } from '../play.js';
 import { templateVersions } from '../projects.js';
+import { bootId, diagView } from '../diag.js';
 
-export function register(router, { watchdog, clientIp }) {
-  router.get('/healthz', (req, res) => sendJson(res, 200, { ok: true }), { public: true });
+export function register(router, { watchdog, clientIp, builds }) {
+  router.get('/healthz', (req, res) => sendJson(res, 200, { ok: true, boot: bootId }), { public: true });
+  router.get('/api/diag', (req, res) => sendJson(res, 200, { ...diagView(), builds: builds.queueView() }));
 
   router.post('/api/auth/login', async (req, res, { body }) => {
     const ip = clientIp(req);

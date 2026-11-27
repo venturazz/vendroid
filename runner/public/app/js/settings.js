@@ -1,5 +1,6 @@
 // Settings dialog: agent (MCP/REST) connection details, git identity, environment checks.
 import { $, app, api, el, toast, guard, emit, actionButton, prompt } from './core.js';
+import { renderNetlog, netlogText, clearNetlog } from './netlog.js';
 
 let info = null;
 const CHECK_LABELS = {
@@ -9,6 +10,11 @@ const CHECK_LABELS = {
 export async function openSettings() {
   const d = $('dlgSettings');
   d.showModal();
+  renderNetlog();
+  api('/api/diag').then((g) => {
+    $('netlogDiag').textContent = `runner up ${Math.round(g.uptimeSec / 60)} min · RSS ${g.memory.rssMB} MB · host free ${g.memory.hostFreeMB}/${g.memory.hostTotalMB} MB · load ${g.load.join(' ')} (${g.cpus} cpu)`
+      + (g.previousExit && g.previousExit.reason !== 'stopped' ? ` · previous run ended: ${g.previousExit.reason} ${g.previousExit.exitedAt ? ` at ${g.previousExit.exitedAt}` : ` (it had started ${g.previousExit.bootedAt})`}` : '');
+  }).catch(() => {});
   try { info = await api('/api/agent/info'); } catch (e) { toast(e.message, 'err'); return; }
   const publicUrl = `${location.origin}/mcp`;
   $('mcpLocal').textContent = info.localUrl;
@@ -131,3 +137,9 @@ $('pvSave').addEventListener('click', guard(async () => {
   renderProviders();
 }));
 export { CHECK_LABELS };
+
+$('netlogCopy').addEventListener('click', guard(async () => {
+  const t = netlogText() || '(empty)';
+  try { await navigator.clipboard.writeText(t); toast('Connection log copied', 'ok'); } catch { prompt('Connection log', { value: t }); }
+}));
+$('netlogClear').addEventListener('click', () => clearNetlog());

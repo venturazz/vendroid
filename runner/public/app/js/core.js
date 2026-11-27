@@ -21,6 +21,10 @@ export const pref = (k, d) => (prefs[k] === undefined ? d : prefs[k]);
 export const setPref = (k, v) => { prefs[k] = v; try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch { /* quota */ } };
 
 // ---- HTTP
+let netHook = null;
+/** netlog.js registers here; every dropped request/stream is reported (kind, what, message). */
+export const onNetError = (fn) => { netHook = fn; };
+export const reportNet = (kind, what, message) => { try { netHook?.(kind, what, message); } catch { /* never break callers */ } };
 export class ApiError extends Error {
   constructor(status, data) {
     super(data?.error || data?.message || `HTTP ${status}`);
@@ -29,11 +33,18 @@ export class ApiError extends Error {
   }
 }
 export async function api(path, { method = 'GET', body, raw = false } = {}) {
-  const r = await fetch(path, {
-    method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let r;
+  try {
+    r = await fetch(path, {
+      method,
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (e) {
+    reportNet('api', `${method} ${path.split('?')[0]}`, e.message);
+    throw e;
+  }
+  if (r.status === 502 || r.status === 503 || r.status === 504) reportNet('api', `${method} ${path.split('?')[0]}`, `HTTP ${r.status} from the proxy`);
   if (r.status === 401) { location.reload(); throw new ApiError(401, { error: 'Session expired' }); }
   if (raw) {
     if (!r.ok) throw new ApiError(r.status, await r.json().catch(() => ({})));
@@ -48,13 +59,27 @@ export const pApi = (suffix, opts) => api(`/api/projects/${encodeURIComponent(ap
 
 /** POST that answers with text/event-stream; calls onEvent(event, data) per message. */
 export async function postStream(path, body, onEvent, signal) {
-  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+  let r;
+  try {
+    r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+  } catch (e) {
+    if (e.name !== 'AbortError') reportNet('chat', `POST ${path}`, e.message);
+    throw e;
+  }
   if (!r.ok) throw new ApiError(r.status, await r.json().catch(() => ({})));
   const reader = r.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
+  const t0 = Date.now();
   for (;;) {
-    const { value, done } = await reader.read();
+    let value;
+    let done;
+    try {
+      ({ value, done } = await reader.read());
+    } catch (e) {
+      if (e.name !== 'AbortError') reportNet('chat', `stream ${path.split('/').slice(-2).join('/')} after ${Math.round((Date.now() - t0) / 1000)}s`, e.message);
+      throw e;
+    }
     if (done) break;
     buf += dec.decode(value, { stream: true });
     let i;

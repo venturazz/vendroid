@@ -373,3 +373,8 @@ body.phone .shortcuts{display:none}
 .chip.warn{background:var(--warn);color:#000}
 .cm-lintRange-error{background-image:none!important;text-decoration:underline wavy var(--err);text-decoration-skip-ink:none;text-underline-offset:3px}
 .cm-lintRange-warning{background-image:none!important;text-decoration:underline wavy var(--warn);text-decoration-skip-ink:none;text-underline-offset:3px}
+
+/* ---- connection log */
+.netlog{max-height:220px;overflow:auto;font-size:12px;border:1px solid var(--bd);border-radius:6px;padding:4px 8px;margin-top:6px}
+.netrow{padding:4px 0;border-bottom:1px solid var(--bd);word-break:break-word}
+.netrow:last-child{border-bottom:0}

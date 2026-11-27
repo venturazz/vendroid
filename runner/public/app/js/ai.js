@@ -1,6 +1,6 @@
 // AI coding panel: chat with 9Router about the active project, review proposed edits as diffs,
 // apply with one click (with undo), or hand the task to Hermes Agent.
-import { $, app, api, pApi, el, toast, guard, busy, postStream, renderDiff, emit, on, pref, setPref, actionButton, notify, perFrame } from './core.js';
+import { $, app, api, pApi, el, toast, guard, busy, postStream, renderDiff, emit, on, pref, setPref, actionButton, notify, perFrame, reportNet } from './core.js';
 import { selectionText, openTabs, openFile, saveAll, reloadFromDisk } from './editor.js';
 
 const extraContext = new Set();
@@ -306,6 +306,7 @@ function followJob(jobId, after, onEvent, signal) {
     es.addEventListener('end', () => close(resolve));
     es.addEventListener('error', (e) => {
       if (e.data) { onEvent('error', JSON.parse(e.data), e.lastEventId); return; } // the turn failed
+      reportNet('job', `AI turn ${jobId}`, `EventSource error (retry ${fails + 1})`);
       // connection problem: EventSource retries by itself (with Last-Event-ID); give up if the job is gone
       if (es.readyState === EventSource.CLOSED || ++fails > 40) close(() => reject(new Error('Lost the connection to the runner')));
     });

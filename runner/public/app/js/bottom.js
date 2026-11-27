@@ -1,5 +1,5 @@
 // Bottom panel scoped to the active project: Build Output, Logcat, Device screenshot/actions.
-import { $, app, api, pApi, el, toast, guard, busy, fmtDur, notify, emit, on, pref, setPref, perFrame } from './core.js';
+import { $, app, api, pApi, el, toast, guard, busy, fmtDur, notify, emit, on, pref, setPref, perFrame, reportNet } from './core.js';
 import { openFile } from './editor.js';
 import { askToFix, setLatestFailedBuild } from './ai.js';
 import { parseProblems } from './problems.js';
@@ -164,6 +164,7 @@ export function attachBuild(id) {
     observe(s);
     if (s.id === selected) setBuildState(s);
   });
+  es.onerror = () => { if (es) reportNet('build', `build log ${id}`, 'EventSource error (reconnecting)'); };
   es.addEventListener('end', (e) => {
     es.close();
     es = null;

@@ -1,7 +1,7 @@
 // Live project events from the server (/api/projects/:id/events): file changes from any source
 // (IDE, Hermes over MCP, AI assistant, git) and build state changes. Re-emitted on the app bus as
 // `files-changed` / `fs-changed` / `build-live`; EventSource reconnects on its own.
-import { emit } from './core.js';
+import { emit, reportNet } from './core.js';
 
 let es = null;
 let projectId = null;
@@ -23,7 +23,7 @@ export function connectLive(id) {
     emit('live', true);
     if (hellos++) { emit('files-changed', null); emit('fs-changed'); } // reconnected: catch up on missed changes
   });
-  es.onerror = () => emit('live', false);
+  es.onerror = () => { emit('live', false); reportNet('live', 'project event stream', 'EventSource error (reconnecting)'); };
 }
 
 export function disconnectLive() {

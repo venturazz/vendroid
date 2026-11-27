@@ -19,6 +19,7 @@ import * as projectRoutes from './routes/projects.js';
 import * as aiRoutes from './routes/ai.js';
 import * as agentRoutes from './routes/agent.js';
 import * as playRoutes from './routes/play.js';
+import { initDiag, markStopped } from './diag.js';
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const trustProxy = ['1', 'true'].includes(String(process.env.TRUST_PROXY || '').toLowerCase());
@@ -105,6 +106,7 @@ export function start() {
     process.exit(1);
   }
   fs.mkdirSync(config.dataDir, { recursive: true });
+  initDiag();
   auth.initAuth();
   projects.init();
   adoptLegacyProject();
@@ -142,7 +144,8 @@ export function start() {
       + ` auto-reconnect=${watchdog.enabled ? watchdog.target : 'off'} git-webhook=${config.gitWebhookSecret ? 'on' : 'off'}`
       + ` git-token=${config.gitToken ? 'set' : 'none'} mcp=/mcp`);
   });
-  const shutdown = () => {
+  const shutdown = (sig) => {
+    markStopped(typeof sig === 'string' ? sig : 'signal');
     watchdog.stop();
     const id = builds.activeId();
     if (id) { try { builds.cancel(id); } catch { /* ignore */ } }

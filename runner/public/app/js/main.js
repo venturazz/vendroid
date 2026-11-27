@@ -10,6 +10,9 @@ import { openSettings } from './settings.js';
 import { refreshPublish } from './publish.js';
 import { connectLive, disconnectLive } from './live.js';
 import './mobile.js';
+import { netError, renderNetlog } from './netlog.js';
+import { onNetError } from './core.js';
+onNetError(netError);
 
 // ---------------------------------------------------------------- top bar status
 function badge(node, text, cls, title) {
